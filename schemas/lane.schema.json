@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cadre.dev/schemas/lane.schema.json",
+  "title": "Cadre Lane Contract",
+  "description": "The universal adapter: any model, CLI agent, GUI bot, MCP server, or human becomes a lane.",
+  "type": "object",
+  "required": ["name", "good_at", "cost", "talks", "proves"],
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,38}$",
+      "description": "Stable lane id (kebab-case)."
+    },
+    "identity": {
+      "type": "string",
+      "description": "Optional named-agent class that persists across runs (e.g. 'sol-class'), carrying memory and quirks."
+    },
+    "good_at": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 },
+      "description": "Task classes this lane handles well; feeds the router's fit matching."
+    },
+    "cost": {
+      "type": "string",
+      "enum": ["free", "metered", "plan", "rollover", "coffee"],
+      "description": "Economic class: free (local), metered (per-token), plan (rides a subscription you own), rollover (use-it-or-lose-it credits), coffee (a human)."
+    },
+ "talks": {
+      "type": "string",
+      "enum": ["terminal", "http", "stdin", "chat"],
+      "description": "How to invoke this lane."
+    },
+    "proves": {
+      "type": "string",
+      "enum": ["diffs", "test-output", "commands", "artifacts", "citations", "verdict"],
+      "description": "What checkable evidence this lane can produce for the gate."
+       },
+    "craft": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Named, versioned skills this lane swears by (superpowers-style)."
+    },
+    "invoke": {
+      "type": "object",
+      "description": "Adapter-specific invocation details (command template, endpoint, prompt wrapper).",
+      "additionalProperties": true
+    }
+  }
+}
