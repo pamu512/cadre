@@ -1,22 +1,18 @@
 #!/usr/bin/env node
 // Cadre — any model, any bot, one command.
-// CLI skeleton: go / lanes / help are real; the rest are honest stubs.
 import { cmdHelp } from '../src/commands/help.js';
 import { cmdGo } from '../src/commands/go.js';
 import { cmdLanes } from '../src/commands/lanes.js';
-
-const STUBS = {
-  parity: 'build to parity against a cited reference, unattended',
-  plan: 'the spend planner — bench lanes before you build',
-  meter: 'windows, quotas, rollover, resets',
-  sweep: 'resume or retire the leftovers',
-  map: 'the living codebase graph',
-  watch: 'attach to a live run',
-  proof: 'the evidence bundle',
-  debate: 'two lanes argue, citations checked',
-  pin: 'optional: pin roles, cap spend',
-  mcp: 'run cadre inside your editor\'s chat',
-};
+import { cmdParity } from '../src/commands/parity.js';
+import { cmdPlan } from '../src/commands/plan.js';
+import { cmdMeter } from '../src/commands/meter.js';
+import { cmdSweep } from '../src/commands/sweep.js';
+import { cmdMap } from '../src/commands/map.js';
+import { cmdWatch } from '../src/commands/watch.js';
+import { cmdProof } from '../src/commands/proof.js';
+import { cmdDebate } from '../src/commands/debate.js';
+import { cmdPin } from '../src/commands/pin.js';
+import { cmdMcp } from '../src/commands/mcp.js';
 
 function parseArgv(argv) {
   const _ = [];
@@ -41,20 +37,22 @@ async function main() {
   const { _, flags } = parseArgv(rest);
 
   switch (command) {
-    case 'go':
-      return cmdGo(_, flags);
-    case 'lanes':
-      return cmdLanes(flags);
+    case 'go': return cmdGo(_, flags);
+    case 'lanes': return cmdLanes(flags);
     case 'help':
     case '--help':
-    case '-h':
-      return cmdHelp();
+    case '-h': return cmdHelp();
+    case 'parity': return cmdParity(_, flags);
+    case 'plan': return cmdPlan(_, flags);
+    case 'meter': return cmdMeter(_, flags);
+    case 'sweep': return cmdSweep(_, flags);
+    case 'map': return cmdMap(_, flags);
+    case 'watch': return cmdWatch(_, flags);
+    case 'proof': return cmdProof(_, flags);
+    case 'debate': return cmdDebate(_, flags);
+    case 'pin': return cmdPin(_, flags);
+    case 'mcp': return cmdMcp(_, flags);
     default: {
-      if (STUBS[command]) {
-        console.error(`cadre ${command} — ${STUBS[command]}`);
-        console.error('not wired yet. The contract exists; the organ doesn\'t. Say the word.');
-        return 2;
-      }
       console.error(`unknown command: ${command}\n`);
       cmdHelp();
       return 1;

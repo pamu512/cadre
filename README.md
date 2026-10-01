@@ -1,63 +1,38 @@
 # Cadre
 
-> Any model. Any bot. One command.
+Any model. Any bot. One command.
 
-A model/bot-agnostic agent harness — **experiment stage**. This scaffold wraps the
-[ax](~/.config/ax/) consensus harness on this machine: `cadre go` delegates to
-`ax build` (plan gate → implement → codex finalize → **evidence gate**), `cadre lanes`
-reads the live ax registry and projects it onto the lane contract.
+Cadre is a model-agnostic agent harness that wraps the `ax` coordination layer, providing a unified interface for agentic workflows with a strict evidence gate.
 
-## The lane contract
+## Core Commands
 
-Seven fields. That's the whole integration story.
+- `cadre go "<outcome>"`: Musters the crew, runs the loop, and gates on checkable evidence.
+- `cadre lanes`: Lists available agent lanes, their capabilities, and costs.
+- `cadre parity "<outcome>" --ref <ref>`: Builds to parity against a cited reference.
+- `cadre plan "<task>"`: Benches lanes and estimates spend before building.
+- `cadre meter`: Monitors windows, quotas, and rollover resets.
+- `cadre sweep`: Resumes interrupted runs or retires leftovers.
+- `cadre map`: Generates a living codebase graph.
+- `cadre watch [run]`: Attaches to a live run.
+- `cadre proof [run]`: Dumps the evidence bundle for a run.
+- `cadre debate "<question>"`: Runs a cross-lane adversarial debate with citation checks.
+- `cadre pin`: Manages role pinning and spend caps.
+- `cadre mcp`: Exposes Cadre as an MCP server for editor integration.
 
-```json
-{
-  "name": "ax-codex",
-  "identity": "terra-class",
-  "good_at": ["edits", "tests"],
-  "cost": "plan",
-  "talks": "terminal",
-  "proves": "test-output",
-  "craft": ["verify-before-claiming"]
-}
-```
+## Apertus Integration
 
-- `name` — kebab-case id
-- `identity` — optional named-agent class that persists across runs
-- `good_at` — task classes (feeds the router)
-- `cost` — `free | metered | plan | rollover | coffee` (coffee = a human)
-- `talks` — `terminal | http | stdin | chat`
-- `proves` — what checkable evidence this lane produces: `diffs | test-output | commands | artifacts | citations | verdict`
-- `craft` — named, versioned skills the lane swears by
+Cadre supports Apertus lanes (8B/70B) via the Hermes interface. 
+Lanes are declared in `~/.cadre/lanes/*.json`.
 
-Formal schema: [`schemas/lane.schema.json`](schemas/lane.schema.json).
-Declare your own lanes in `~/.cadre/lanes/*.json`.
+## Evidence Gate
 
-## Run
+Nothing is DONE in Cadre unless it passes the evidence gate:
+- Command + Output
+- File Diffs
+- Test Results
+- Citations
 
-```bash
-./bin/cadre.js help
-./bin/cadre.js lanes            # live ax registry + your declared lanes
-./bin/cadre.js lanes --json
-./bin/cadre.js go "fix the flaky checkout test" --dry   # see the pipeline
-./bin/cadre.js go "fix the flaky checkout test"          # actually runs (ax build)
-```
+## Installation
 
-Requires Node ≥18. Zero npm dependencies.
-
-## Status
-
-| Command | State |
-|---|---|
-| `go` | **working** — wraps `ax build` (evidence gate included) |
-| `lanes` | **working** — ax registry + user lanes, validated |
-| parity / plan / meter / sweep / map / watch / proof / debate / pin / mcp | contract only — honest stubs, exit 2 |
-
-## Design docs
-
-- Concept page: `../V12 Muster.html` (the product story; predates the rename)
-- Market research: `../research/muster-market-20261001-1930/`
-
-Name note: "Cadre" chosen after a 17-candidate collision scan (2026-10-01);
-"Muster" was dropped — taken twice in-category.
+1. Ensure `ax` is installed at `~/.local/bin/ax`.
+2. Install Cadre: `npm install -g .` (from this directory).
