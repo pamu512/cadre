@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { chatLane, CHAT_KINDS } from './chatlane.js';
+import { invokeMcpLane } from './mcplane.js';
 
 const run = promisify(execFile);
 const AX = process.env.CADRE_AX || join(homedir(), '.local/bin/ax');
@@ -53,6 +54,13 @@ export async function invokeLane(lane, task, opts = {}) {
     } catch (e) {
       return { ok: false, kind, error: String(e.message).slice(0, 500), stdout: e.stdout || '' };
     }
+  }
+  if (kind === 'mcp') {
+    // MCP server lane: full stdio JSON-RPC lifecycle (initialize -> tools -> call)
+    return await invokeMcpLane(lane, task, opts);
+  }
+  if (kind === 'app') {
+    return { ok: false, error: `lane ${lane.name}: GUI app lane - presence-only (drive the app yourself, or give it a CLI/MCP bridge)` };
   }
   if (kind === 'http') {
     throw new Error(`lane ${lane.name}: generic http invoke not configured (endpoint lanes need a driver; OpenAI-compatible ones have one)`);

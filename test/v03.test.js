@@ -196,3 +196,44 @@ test('scan: known agent apps probed on darwin (no false lanes)', async () => {
     assert.ok(l.invoke.bundle, 'app lane names its bundle');
   }
 });
+
+test('invoke: MCP lane lifecycle over stdio (initialize -> tools -> call)', { timeout: 60000 }, async () => {
+  const { invokeLane } = await import(join(ROOT, 'src/invoke.js'));
+  // a minimal in-repo MCP server we control: node echo of tools/call
+  const serverScript = join(ROOT, 'scripts/fixture-writer.sh'); // not MCP; use inline node instead
+  const { spawn } = await import('node:child_process');
+  // tiny MCP server as a node -e command
+  const cmd = process.execPath;
+  const code = `
+    let buf='';
+    process.stdin.on('data', (d) => {
+      buf += d;
+      let nl;
+      while ((nl = buf.indexOf('\\n')) > -1) {
+        const line = buf.slice(0, nl).trim(); buf = buf.slice(nl+1);
+        if (!line) continue;
+        const m = JSON.parse(line);
+        if (m.method === 'initialize') {
+          process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result:{protocolVersion:'2024-11-05',capabilities:{},serverInfo:{name:'testsrv',version:'0'}}})+'\\n');
+        } else if (m.method === 'tools/list') {
+          process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result:{tools:[{name:'echo_task',description:'echoes',inputSchema:{type:'object',properties:{text:{type:'string'}}}}]}})+'\\n');
+        } else if (m.method === 'tools/call') {
+          process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result:{content:[{type:'text',text:'ECHOED: '+m.params.arguments.text}]}})+'\\n');
+        }
+      }
+    });
+  `;
+  const lane = { name: 'mcp-testsrv', invoke: { kind: 'mcp', command: cmd, args: ['-e', code] } };
+  const r = await invokeLane(lane, 'hello mcp world', { timeoutMs: 20000 });
+  assert.ok(r.ok, 'lifecycle must complete: ' + (r.error || ''));
+  assert.equal(r.tool, 'echo_task');
+  assert.ok(r.text.includes('ECHOED: hello mcp world'));
+  assert.deepEqual(r.toolsAvailable, ['echo_task']);
+});
+
+test('invoke: app lane is presence-only with an honest error', async () => {
+  const { invokeLane } = await import(join(ROOT, 'src/invoke.js'));
+  const r = await invokeLane({ name: 'app-x', invoke: { kind: 'app', bundle: 'X.app' } }, 'do thing');
+  assert.ok(!r.ok);
+  assert.ok(r.error.includes('presence-only'));
+});
