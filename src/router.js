@@ -1,5 +1,8 @@
 // router - roles go to whoever fits, not whoever's loyal.
 // Deterministic, explainable fit scoring over the roster + pins. No black box.
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { homedir } from 'node:os';
 import { loadPins } from './store.js';
 
 export const ROLES = ['planner', 'builder', 'critic', 'verifier'];
@@ -13,14 +16,15 @@ const ROLE_TAGS = {
   verifier: ['verify', 'ui', 'backend', 'tests', 'summarize'],
 };
 
-// Prefer Apertus as the primary reasoning lane, per the approved direction:
-// 8B cheap/draft, 70B decide - when the key is present.
-const PREFERRED = new Map([
-  ['planner',  ['apertus-8b', 'apertus-70b']],
-  ['critic',   ['apertus-70b', 'apertus-8b']],
-  ['builder',  ['ax-codex', 'ax-hermes', 'ax-cursor', 'ax-autoclaw']],
-  ['verifier', ['ax-autoclaw', 'ax-codex']],
-]);
+// Reasoning-lane preference is DATA, not code: role preference order comes from
+// $CADRE_HOME/reasoning.json (or sensible tag-based fallback), never hardcoded
+// provider names. Cadre is model-agnostic; any keyed chat lane can serve any role.
+//   {"planner": ["apertus-8b", "glm"], "critic": ["apertus-70b"]}
+const PREFERRED = loadPreferred();
+function loadPreferred() {
+  const p = process.env.CADRE_REASONING_PREFS || join(process.env.CADRE_HOME || join(homedir(), '.cadre'), 'reasoning.json');
+  try { return new Map(Object.entries(JSON.parse(readFileSync(p, 'utf-8')))); } catch { return new Map(); }
+}
 
 const COST_RANK = { free: 0, plan: 1, rollover: 2, metered: 3, coffee: 4 };
 

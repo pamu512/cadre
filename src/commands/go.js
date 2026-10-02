@@ -1,6 +1,6 @@
 // go - the one command. Scans the room, forms the cadre, runs the loop,
 // gates on evidence, files the receipts. Every step is real on this machine:
-// ax lanes delegate to the ax binary, apertus lanes call the API, the gate
+// ax lanes delegate to the ax binary; keyed chat lanes (any OpenAI-compatible
 // re-checks artifacts on disk before stamping anything.
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -8,7 +8,8 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'no
 import { join, resolve } from 'node:path';
 import { buildRoster } from '../scan.js';
 import { assignRoles, explainRouting } from '../router.js';
-import { apertusAvailable, apertusChat, auditCall } from '../apertus.js';
+import { auditCall } from '../apertus.js';
+import { chatLaneAvailable, chatLane } from '../chatlane.js';
 import { gateVerdict, renderGateReport, verifyCommands } from '../gate.js';
 import { invokeLane } from '../invoke.js';
 import { buildScopeManifest, scopeCreep, renderManifest } from '../scope.js';
@@ -56,7 +57,7 @@ export async function cmdGo(args, flags, { cwd = process.cwd() } = {}) {
     console.log(`roster: ${roster.lanes.length} lane(s) on this machine (${roster.clis.map((c) => c.label).join(', ') || 'no CLIs'} · ${roster.platform})`);
     console.log('crew (roles by fit, pins override):');
     console.log(explainRouting(routing).replace(/^/gm, '  '));
-    console.log(`apertus: ${apertusAvailable() ? 'live (APERTUS_API_KEY set) - planner/critic routed to it' : 'not keyed - planner uses the local scaffold, critic skipped'}`);
+    console.log(`keyed chat lanes: ${roster.lanes.filter(chatLaneAvailable).map((l) => l.name).join(', ') || 'none - planner uses the local scaffold, critic skipped'}`);
     console.log('pipeline: sweep -> scan -> route -> plan -> build -> critique -> verify -> gate -> file');
     return 0;
   }
@@ -99,21 +100,21 @@ export async function cmdGo(args, flags, { cwd = process.cwd() } = {}) {
   console.log('\n── plan ─────────────────────────────');
   let planText = null;
   const planner = byRole.planner;
-  if (planner?.invoke?.kind === 'apertus' && apertusAvailable() && underBudget()) {
+  if (planner && chatLaneAvailable(planner) && underBudget()) {
     try {
-      const res = await apertusChat([
+      const res = await chatLane(planner, [
         { role: 'system', content: 'You are the planner of a coding cadre. Given a brief, produce a numbered plan of at most 6 concrete, checkable steps. Each step: verb, target, and how to verify it. No prose preamble.' },
         { role: 'user', content: `Brief: ${brief}\nWorking directory contains a code project.` },
-      ], { model: planner.invoke.model.startsWith('Apertus-70B') ? 'Apertus-70B' : 'Apertus-8B', max_tokens: 700 });
-      meteredTokens += (res.usage?.total_tokens || 0);
+      ], { max_tokens: 700 });
+meteredTokens += (res.usage?.total_tokens || 0);
       planText = res.text;
       auditCall(record.id, planner.name, res);
       await addEvidence(record.id, { kind: 'citation', label: `planner (${planner.name}) plan`, ref: `runs/${record.id}/run.log#plan` });
-      console.log('planner · apertus accepted the brief:');
+      console.log(`planner · ${planner.name} accepted the brief:`);
       console.log(planText.replace(/^/gm, '  '));
-      appendLog(record.id, `PLAN (apertus ${res.model}):\n${planText}`);
+      appendLog(record.id, `PLAN (${planner.name} ${res.model}):\n${planText}`);
     } catch (e) {
-      console.log(`planner · apertus failed (${e.message}) - falling back to local scaffold`);
+      console.log(`planner · ${planner.name} failed (${e.message.split('\n')[0]}) - falling back to local scaffold`);
     }
   }
   if (!planText) {
@@ -167,18 +168,18 @@ export async function cmdGo(args, flags, { cwd = process.cwd() } = {}) {
   // ---- 3. critique ----------------------------------------------------------
   console.log('\n── critique ─────────────────────────');
   const critic = byRole.critic;
-  if (critic?.invoke?.kind === 'apertus' && apertusAvailable() && underBudget()) {
+  if (critic && chatLaneAvailable(critic) && underBudget()) {
     try {
-      const res = await apertusChat([
+      const res = await chatLane(critic, [
         { role: 'system', content: 'You are the critic of a coding cadre. Review the builder output below against the brief. List concrete findings with file references where possible. If nothing is wrong, say CLEAN.' },
         { role: 'user', content: `Brief: ${brief}\n\nBuilder output (tail):\n${buildOutput.slice(-4000)}` },
-      ], { model: 'Apertus-70B', max_tokens: 600 });
+      ], { max_tokens: 600 });
       meteredTokens += (res.usage?.total_tokens || 0);
-      auditCall(record.id, 'apertus-70b', res);
-      await addEvidence(record.id, { kind: 'citation', label: 'critic (apertus-70b) review', ref: `runs/${record.id}/run.log#critique` });
-      console.log(`critic · apertus-70b:`);
+      auditCall(record.id, critic.name, res);
+      await addEvidence(record.id, { kind: 'citation', label: `critic (${critic.name}) review`, ref: `runs/${record.id}/run.log#critique` });
+      console.log(`critic · ${critic.name}:`);
       console.log(res.text.replace(/^/gm, '  '));
-      appendLog(record.id, `CRITIQUE (apertus-70b):\n${res.text}`);
+      appendLog(record.id, `CRITIQUE (${critic.name}):\n${res.text}`);
     } catch (e) {
       console.log(`critic · skipped (${e.message.split('\n')[0]})`);
       appendLog(record.id, `CRITIQUE skipped: ${e.message.slice(0, 500)}`);

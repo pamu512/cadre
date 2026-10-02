@@ -428,3 +428,24 @@ test('B6 parity --ledger renders entries and tolerates an empty ledger', async (
   assert.ok(shown.stdout.includes('0042'));
   assert.ok(shown.stdout.includes('approved'));
 });
+
+// ---- model agnosticism -------------------------------------------------------
+test('chatlane: any OpenAI-compatible lane is drivable — no provider names in code paths', async () => {
+  const { chatLaneAvailable, resolveChat } = await import(join(ROOT, 'src/chatlane.js'));
+  const lane = { name: 'whatever-gw', invoke: { kind: 'openai-compatible', api_key_env: 'SOME_KEY', base_url: 'https://gw.example.com/v1', model: 'x' } };
+  process.env.SOME_KEY = 'k';
+  assert.ok(chatLaneAvailable(lane));
+  const { url } = resolveChat(lane);
+  assert.equal(url.href, 'https://gw.example.com/v1/chat/completions');
+  // base without /v1 gets it appended
+  const { url: u2 } = resolveChat({ invoke: { kind: 'openai-compatible', base_url: 'https://gw2.example.com' } });
+  assert.ok(u2.href.endsWith('/v1/chat/completions'));
+  delete process.env.SOME_KEY;
+  assert.ok(!chatLaneAvailable(lane));
+});
+
+test('router: no hardcoded provider names — preferences come from data', async () => {
+  const src = readFileSync(join(ROOT, 'src/router.js'), 'utf-8');
+  assert.ok(!/PREFERRED\s*=\s*new Map\(\[/.test(src), 'PREFERRED must not be a hardcoded literal map');
+  assert.ok(src.includes('reasoning.json'), 'preference source must be the data file');
+});
