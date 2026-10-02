@@ -125,11 +125,40 @@ export async function cmdParity(args, flags) {
     })();
     const { invokeLane } = await import('../invoke.js');
     const { buildRoster } = await import('../scan.js');
+    // BUDGET: laps continue only while the loop's metered spend stays under the
+    // cap (default 200k tok, --budget overrides). Free/local lanes never
+    // exhaust it - exactly "as many laps as the budget allows".
+    const budgetTokens = Math.max(1, Number(flags.budget) || 200000);
+    let meteredTokens = 0;
+    const underBudget = () => meteredTokens < budgetTokens;
+    // LEDGER: every lap files one row per behavior - passing with its
+    // citation, failing with its reason. The loop lands its own evidence.
+    const ledgerPath = join(home(), 'parity-ledger.jsonl');
+    mkdirSync(home(), { recursive: true });
+    const fileLap = (iterNo, results, source) => {
+      for (const r of results) {
+        appendFileSync(ledgerPath, JSON.stringify({
+          ts: new Date().toISOString(),
+          run: `loop-${iterNo}`,
+          target: r.behavior.slice(0, 200),
+          ref: source,
+          verdict: r.closed ? `behavior-closed (${r.kind})` : 'behavior-open',
+          evidence_count: r.closed ? 1 : 0,
+          citation: r.citation || '',
+          reason: r.closed ? '' : String(r.reason || '').slice(0, 300),
+        }) + '\n');
+      }
+    };
     let noMoveStreak = 0;
     let prevClosed = -1;
     for (let iter = 1; iter <= maxIter; iter++) {
+      if (!underBudget()) {
+        console.log(`parity loop · BUDGET EXHAUSTED (${meteredTokens} >= ${budgetTokens} tok) after ${iter - 1} lap(s) - stopping honestly`);
+        return 7;
+      }
       const v = await verifyContract(extract(), cwd, { testCmd, refPath: ref });
-      console.log(`\nparity loop · iteration ${iter}/${maxIter}: ${v.closed}/${v.total} closed`);
+      fileLap(iter, v.results, ref);
+      console.log(`\nparity loop · iteration ${iter}/${maxIter}: ${v.closed}/${v.total} closed (ledger rows filed: ${v.results.length})`);
       const open = v.results.filter((r) => !r.closed);
       for (const r of open.slice(0, 5)) console.log(`  open [${r.kind}] ${r.behavior.slice(0, 90)}\n      ${r.reason}`);
       if (open.length === 0) {
@@ -154,7 +183,11 @@ export async function cmdParity(args, flags) {
       const brief = `Close these parity behaviors in ${cwd}:\n${open.slice(0, 10).map((r, i) => `${i + 1}. ${r.behavior.slice(0, 140)}`).join('\n')}`;
       console.log(`parity loop · builder ${builder.name} on ${Math.min(open.length, 10)} open behavior(s)`);
       const res = await invokeLane(builder, brief, { timeoutMs: 1000 * 60 * 30, cwd });
+      meteredTokens += (res.usage?.total_tokens || 0);
       console.log(`parity loop · builder ${res.ok ? 'done' : 'FAILED'}${res.ok ? '' : ': ' + String(res.error || '').slice(0, 120)}`);
+      if (meteredTokens >= budgetTokens) {
+        console.log(`parity loop · budget now exhausted (${meteredTokens}/${budgetTokens} tok) - next lap will stop`);
+      }
       if (!res.ok && ++noMoveStreak >= 2) {
         console.log('parity loop · CIRCUIT BREAKER: builder failing repeatedly - stopping honestly');
         return 4;

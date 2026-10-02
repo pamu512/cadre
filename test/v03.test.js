@@ -476,3 +476,25 @@ test('router: task class moves routing - free lanes win deterministic, frontier 
   assert.ok(det.why.includes('cheap preferred'), 'policy stated in why line');
   assert.ok(jud.why.includes('frontier preferred'), 'policy stated in why line');
 });
+
+test('parity --until-proven: every lap lands ledger rows (cited on close, reasoned on open) and honors the budget', { timeout: 240000 }, async () => {
+  const h = home('loopledger');
+  mkdirSync(join(h.dir, 'lanes'), { recursive: true });
+  writeFileSync(join(h.dir, 'lanes', 'spec-builder.json'), JSON.stringify({
+    name: 'spec-builder', good_at: ['create', 'write'], cost: 'free', talks: 'terminal', proves: 'commands',
+    invoke: { kind: 'command', command: `/bin/sh ${join(ROOT, 'scripts/spec-fixture.sh')} {brief}` },
+  }));
+  const proj = mkdtempSync(join(tmpdir(), 'loopledger-'));
+  writeFileSync(join(proj, 'package.json'), JSON.stringify({ name: 'p', scripts: { test: 'node -e "process.exit(0)"' } }));
+  writeFileSync(join(proj, 'SPEC.md'), '# Spec\n\n- create hello.txt containing greeting text\n');
+  const r = await cli(h, 'parity', 'match', '--ref', join(proj, 'SPEC.md'), '--cwd', proj, '--until-proven', '--max-iter', '3', '--budget', '5000');
+  assert.ok(r.stdout.includes('ALL BEHAVIORS CLOSED'), 'loop converges');
+  assert.ok(r.stdout.includes('ledger rows filed'), 'lap reports rows filed');
+  const lines = readFileSync(join(h.dir, 'parity-ledger.jsonl'), 'utf-8').trim().split('\n').map((l) => JSON.parse(l));
+  const loopRows = lines.filter((l) => String(l.run).startsWith('loop-'));
+  assert.ok(loopRows.length >= 2, 'loop filed its own rows');
+  const open = loopRows.find((l) => l.verdict === 'behavior-open');
+  assert.ok(open && open.reason && open.reason.length > 0, 'open rows carry a reason');
+  const closed = loopRows.find((l) => String(l.verdict).startsWith('behavior-closed'));
+  assert.ok(closed && closed.citation, 'closed rows carry a citation');
+});
