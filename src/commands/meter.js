@@ -8,7 +8,13 @@ export async function cmdMeter(args, flags) {
 
   // cadre meter --set lane=<name> --provider <provider> --quota 2000000 --reset 2026-10-08T00:00:00Z [--rail official]
   if (flags.set) {
-    const m = String(flags.set);
+    // accept both `--set lane=<name>` and bare `--set <name>`
+    let m = String(flags.set);
+    if (m.startsWith('lane=')) m = m.slice(5);
+    if (!m || !/^[a-z0-9][a-z0-9-]*$/.test(m)) {
+      console.error('--set needs a lane name (e.g. --set lane=my-lane or --set my-lane)');
+      return 2;
+    }
     const quota = flags.quota ? Number(flags.quota) : null;
     if (flags.quota && (!Number.isFinite(quota) || quota <= 0)) {
       console.error('--quota must be a positive number of tokens');

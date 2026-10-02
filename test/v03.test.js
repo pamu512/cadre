@@ -125,3 +125,18 @@ test('install path: PROVEN in a non-git project (fs-mode diff evidence)', { time
   assert.ok(existsSync(join(proj, 'out.txt')));
   assert.equal(readFileSync(join(proj, 'out.txt'), 'utf-8').trim(), 'nogit-works');
 });
+
+test('meter: --set lane=<name> parses the lane= prefix (regression: literal key broke pacing)', async () => {
+  const h = home('mset');
+  const r = await cli(h, 'meter', '--set', 'lane=demo-lane', '--provider', 'p', '--quota', '1000', '--reset', new Date(Date.now() + 36e5).toISOString());
+  assert.equal(r.rc, 0);
+  const { loadMeters, usageFromAudit, pacing } = await import(join(ROOT, 'src/meters.js'));
+  process.env.CADRE_HOME = h.dir;
+  const meters = loadMeters();
+  assert.equal(meters[0].lane, 'demo-lane', 'lane name must not carry the lane= prefix');
+  // and burn keyed by the bare name trips pacing
+  const usage = new Map([['demo-lane', { calls: 1, tokens: 1000 }]]);
+  const p = pacing({ quota: 1000, resetAt: meters[0].reset_at, used: usage.get('demo-lane').tokens });
+  assert.equal(p.state, 'empty');
+  delete process.env.CADRE_HOME;
+});
