@@ -34,6 +34,21 @@ export async function invokeLane(lane, task, opts = {}) {
     );
     return { ok: true, kind, text: result.text, usage: result.usage };
   }
+  if (kind === 'command') {
+    // user lane with a command template: run it with {brief} substituted.
+    // B2's local-builder path: any CLI on this machine becomes a builder lane.
+    const tpl = String(lane.invoke.command || '');
+    if (!tpl) return { ok: false, kind, error: 'invoke.command missing' };
+    const parts = tpl.split(/\s+/);
+    let args = parts.slice(1).map((a) => a.replaceAll('{brief}', task));
+    if (!tpl.includes('{brief}')) args = [...args, task]; // no placeholder: brief becomes the trailing arg
+    try {
+      const { stdout } = await run(parts[0], args, { timeout: timeoutMs, maxBuffer: 1024 * 1024 * 16 });
+      return { ok: true, kind, stdout };
+    } catch (e) {
+      return { ok: false, kind, error: String(e.message).slice(0, 500), stdout: e.stdout || '' };
+    }
+  }
   if (kind === 'http') {
     throw new Error(`lane ${lane.name}: generic http invoke not configured (endpoint lanes need a driver; apertus has one)`);
   }

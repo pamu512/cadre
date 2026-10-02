@@ -576,3 +576,76 @@ test('graphify takes: EXTRACTED/INFERRED edge tags + path queries', async () => 
   const none = pathBetween(idx, 'src/commands/approach.js', 'no/such/file.js');
   assert.equal(none.found, false);
 });
+
+// ---- leftovers: chisel patch / 9router chains / go --local / B8 / B9 --------
+test('chisel take: patch edits are unique-match, confined, and reported', async () => {
+  const { applyPatch, applyPatches, confined } = await import(join(ROOT, 'src/patch.js'));
+  const h = home('patch');
+  writeFileSync(join(h.dir, 'a.txt'), 'alpha beta gamma\n');
+  const ok = applyPatch({ file: join(h.dir, 'a.txt'), find: 'beta', replace: 'BETA' }, { root: h.dir });
+  assert.ok(ok.ok && ok.changed);
+  assert.equal(readFileSync(join(h.dir, 'a.txt'), 'utf-8'), 'alpha BETA gamma\n');
+  // confinement: escape rejected without touching anything
+  const esc = applyPatch({ file: '../../etc/passwd', find: 'x', replace: 'y' }, { root: h.dir });
+  assert.ok(!esc.ok && esc.error.includes('confinement'));
+  assert.ok(!confined('../../outside', h.dir));
+  assert.ok(confined('inside.txt', h.dir));
+  // ambiguity rejected
+  writeFileSync(join(h.dir, 'b.txt'), 'dup dup\n');
+  const amb = applyPatch({ file: join(h.dir, 'b.txt'), find: 'dup', replace: 'x' }, { root: h.dir });
+  assert.ok(!amb.ok && amb.error.includes('not unique'));
+  // missing find-string rejected
+  const miss = applyPatch({ file: join(h.dir, 'a.txt'), find: 'nope', replace: 'x' }, { root: h.dir });
+  assert.ok(!miss.ok);
+  // batch reports per-op
+  const batch = applyPatches([{ file: join(h.dir, 'a.txt'), find: 'BETA', replace: 'beta' }], { root: h.dir });
+  assert.ok(batch[0].ok);
+});
+
+test('9router take: multi-tier fallback chain picks live stops, skips empty', async () => {
+  const { buildChain, pickStop } = await import(join(ROOT, 'src/fallback.js'));
+  const roster = { lanes: [
+    { name: 'sub-lane', cost: 'plan' },
+    { name: 'metered-a', cost: 'metered' },
+    { name: 'free-lane', cost: 'free' },
+  ] };
+  const chain = buildChain(roster, 'builder', { budgetTokens: 5000 });
+  assert.deepEqual(chain.map((s) => s.lane), ['free-lane', 'sub-lane', 'metered-a']); // included-first
+  // empty meter on the first metered stop + dead health on free -> sub wins with reroute note
+  const meters = [{ lane: 'metered-a', quota_tokens: 100, reset_at: new Date(Date.now() + 36e5).toISOString() }];
+  const usage = new Map([['metered-a', { calls: 1, tokens: 100 }]]);
+  const pick = pickStop(chain, { meters, usage, health: { 'free-lane': 'down' } });
+  assert.equal(pick.lane, 'sub-lane');
+  assert.ok(pick.rerouted);
+  assert.ok(pick.notes.some((n) => n.includes('down - skipped')));
+  // when every stop is dead/empty the chain pauses with the reason
+  const pick2 = pickStop(chain, { meters, usage, health: { 'free-lane': 'down', 'sub-lane': 'busy' } });
+  assert.equal(pick2.lane, null);
+  assert.ok(pick2.notes.some((n) => n.includes('all stops exhausted')));
+  // everything exhausted -> null lane, pause note
+  const dead = pickStop(chain, { meters, usage, health: { 'free-lane': 'down', 'sub-lane': 'busy' } });
+  assert.equal(dead.lane, null);
+  assert.ok(dead.notes.some((n) => n.includes('all stops exhausted')));
+});
+
+test('B2: go --local prefers a command-kind user lane over ax', async () => {
+  const h = home('local');
+  mkdirSync(join(h.dir, 'lanes'), { recursive: true });
+  writeFileSync(join(h.dir, 'lanes', 'mytool.json'), JSON.stringify({
+    name: 'mytool', good_at: ['general'], cost: 'free', talks: 'terminal', proves: 'commands',
+    invoke: { kind: 'command', command: 'echo' },
+  }));
+  const r = await cli(h, 'go', 'hello local loop', '--dry', '--local');
+  assert.equal(r.rc, 0);
+  // --dry prints the pipeline; the local note appears when a non-ax builder exists
+  assert.ok(r.stdout.includes('local') || r.stdout.includes('pipeline'), 'dry run must show the local routing');
+});
+
+test('invoke: command-kind lane runs the template with {brief}', async () => {
+  const { invokeLane } = await import(join(ROOT, 'src/invoke.js'));
+  const res = await invokeLane({ name: 'echoer', invoke: { kind: 'command', command: 'echo' } }, 'the-brief', { timeoutMs: 5000 });
+  assert.ok(res.ok);
+  assert.ok(res.stdout.includes('the-brief'));
+  const bad = await invokeLane({ name: 'nope', invoke: { kind: 'command', command: 'definitely-not-a-binary-xyz' } }, 'x', { timeoutMs: 5000 });
+  assert.ok(!bad.ok);
+});

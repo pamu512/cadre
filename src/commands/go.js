@@ -97,6 +97,22 @@ export async function cmdGo(args, flags, { cwd = process.cwd() } = {}) {
 
   const byRole = Object.fromEntries(routing.assignments.map((a) => [a.role, roster.lanes.find((l) => l.name === a.lane)]));
 
+  // B2 --local: standalone loop — ax is just another adapter, not the default.
+  // Prefer a non-ax builder: a user command-kind lane, else a keyed chat lane.
+  if (flags.local) {
+    const userCmd = roster.lanes.find((l) => l.invoke?.kind === 'command');
+    const chatL = roster.lanes.find((l) => ['openai-compatible', 'http-chat', 'apertus'].includes(l.invoke?.kind) && chatLaneAvailable(l));
+    if (userCmd || chatL) {
+      byRole.builder = userCmd || chatL;
+      appendLog(record.id, `LOCAL loop: builder=${byRole.builder.name} (ax skipped by --local)`);
+      console.log(`local · builder=${byRole.builder.name} (ax bypassed)`);
+    } else {
+      console.log('local · no non-ax builder available (no command-kind user lane, no keyed chat lane) - falling back to ax routing');
+      appendLog(record.id, 'LOCAL loop: no non-ax builder, ax kept');
+    }
+  }
+
+
   // ---- meter preflight: downshift or wait-for-refill before spending -------
   try {
     const { loadMeters, pacing } = await import('../meters.js');
@@ -114,12 +130,22 @@ export async function cmdGo(args, flags, { cwd = process.cwd() } = {}) {
             updateRun(record.id, { status: 'resumed-brief', verdict: { passed: false, summary: `paused: ${m.lane} quota empty, resets ${m.reset_at}` } });
             return 3;
           }
-          appendLog(record.id, `METER: ${m.lane} exhausted - roles rerouted off it`);
-          console.log(`meter · ${m.lane} empty - routing around it`);
-          // downshift: pin roles away from the empty lane by filtering it from consideration
+          appendLog(record.id, `METER: ${m.lane} exhausted - falling down the chain`);
+          console.log(`meter · ${m.lane} empty - falling down the chain`);
+          // 9router take: multi-tier fallback chain, included stops first
           roster.lanes = roster.lanes.filter((l) => l.name !== m.lane);
-          const reroute = assignRoles(roster, { brief });
-          Object.assign(byRole, Object.fromEntries(reroute.assignments.map((a) => [a.role, roster.lanes.find((l) => l.name === a.lane)])));
+          const { buildChain, pickStop } = await import('../fallback.js');
+          const health = Object.fromEntries(roster.lanes.map((l) => [l.name, l.invoke?.status || 'ok']));
+          const pick = pickStop(buildChain(roster, 'builder', { budgetTokens }), { health });
+          if (pick.lane) {
+            byRole.builder = roster.lanes.find((l) => l.name === pick.lane);
+            console.log(`chain · stop ${pick.stop}: ${pick.lane}${pick.rerouted ? ' (rerouted)' : ''}${pick.notes.length ? ' - ' + pick.notes.join('; ') : ''}`);
+            appendLog(record.id, `CHAIN stop ${pick.stop}: ${pick.lane} ${pick.notes.join('; ')}`);
+          } else {
+            console.log(`chain · all stops exhausted - pausing with resume plan`);
+            updateRun(record.id, { status: 'resumed-brief', verdict: { passed: false, summary: 'all chain stops exhausted' } });
+            return 3;
+          }
         } else if (p.state === 'pacing') {
           console.log(`meter · ${m.lane} ${p.note}`);
         }

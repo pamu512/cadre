@@ -1,0 +1,13 @@
+{
+  "name": "generic-cli",
+  "good_at": ["general"],
+  "cost": "free",
+  "talks": "terminal",
+  "proves": "commands",
+  "craft": ["one-tool-one-job"],
+  "invoke": {
+    "kind": "command",
+    "command": "echo",
+    "note": "Template: any CLI becomes a lane. Replace 'echo' with your tool; {brief} is substituted with the task. Copy to ~/.cadre/lanes/ and edit."
+  }
+}

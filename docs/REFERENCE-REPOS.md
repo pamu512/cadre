@@ -10,10 +10,10 @@ and whether the take has landed in code (verified by tests) or is pending.
 | [ponytail](https://github.com/dietrichgebert/ponytail) | "Laziest senior dev" discipline — write only what the ask needs; scope-lock instinct; **reuse-first** (smallest change that works) | ✅ scope lock (`go --scope`, creep rejects at gate) + reuse-first step (`src/reuse.js`) |
 | [caveman](https://github.com/juliusbrussee/caveman) | Compressed agent output; every cut byte keeps a restorable backup | ✅ frugal pipes (`src/frugal.js`): collapse/cap before the ledger, original backed up |
 | [graphify](https://github.com/Graphify-Labs/graphify) | Living codebase map — symbols, edges, hot zones; no repo re-reads | ✅ map index + graph slice/impact/blast-radius, **EXTRACTED/INFERRED edge tags + path queries** (`src/graph.js`) |
-| [Chisel](https://github.com/ckanthony/Chisel) | Patch-scoped edits with enforced path confinement — "precise hands" | ⚠️ partial: scope-lock confinement at the gate; not patch-scoped edits inside the loop |
+| [Chisel](https://github.com/ckanthony/Chisel) | Patch-scoped edits with enforced path confinement — "precise hands" | ✅ `src/patch.js`: unique-match find→replace patches, confinement-root rejection, per-op reports |
 | [rtk](https://github.com/rtk-ai/rtk) | Filter/compress tool output before model context; **never grow** rule | ✅ frugal pipes: rtk's never-grow rule + savings counters (`src/frugal.js`) |
 | [espresso](https://github.com/mirkobozzetto/espresso) | Named persistent agents (identity across runs); riding provider subscriptions | ✅ lane `identity` field in the contract; plan-class lanes ride subscriptions |
-| [9router](https://github.com/decolua/9router) | Routing via existing plan logins instead of fresh API keys; multi-tier fallback when a tier runs dry | ⚠️ partial: plan-lane detection + single-tier downshift/wait-for-refill; no multi-tier fallback chains yet |
+| [9router](https://github.com/decolua/9router) | Routing via existing plan logins instead of fresh API keys; multi-tier fallback when a tier runs dry | ✅ plan-lane detection + multi-tier fallback chains (`src/fallback.js`): included-first stops, empty-meter skip, pause-with-resume-plan when all exhaust |
 | [superpowers](https://github.com/obra/superpowers) | Craft as named, versioned skills — how work is done | ✅ lane `craft` field in the contract (closed 7-field schema) |
 
 ## Reference implementation
