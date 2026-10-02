@@ -46,6 +46,27 @@ function parseArgv(argv) {
   return { _, flags };
 }
 
+// Ctrl-C = safe stop: nothing lost. Every run carries its own lock + ledger, so
+// an interrupted run is a filed state sweep picks up - never a corrupted one.
+import { updateRun as _updateRun } from '../src/store.js';
+const getActiveRun = () => globalThis.CADRE_ACTIVE_RUN || null;
+process.on('SIGINT', () => {
+  console.log('\ncadre: interrupted - stopping. Nothing is lost.');
+  const ACTIVE_RUN_ID = getActiveRun();
+  if (ACTIVE_RUN_ID) {
+    try {
+      _updateRun(ACTIVE_RUN_ID, { status: 'interrupted', ended: new Date().toISOString() });
+      console.log(`  run ${ACTIVE_RUN_ID} filed as interrupted - cadre sweep --resume ${ACTIVE_RUN_ID} to continue`);
+    } catch { /* best effort; the lock file still tells sweep the truth */ }
+  } else {
+    console.log('  (cadre sweep will find any leftovers)');
+  }
+  process.removeAllListeners('SIGINT');
+  process.on('SIGINT', () => process.exit(130));
+  process.exitCode = 130;
+  setTimeout(() => process.exit(130), 300).unref();
+});
+
 async function main() {
   const argv = process.argv.slice(2);
   if (argv.length === 0) return cmdHelp();

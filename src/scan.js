@@ -2,6 +2,7 @@
 // (CLIs, ax lanes, env-keyed API lanes, local model servers) and project
 // everything onto the lane contract. The roster is your setup; nothing to enroll.
 import { execFile } from 'node:child_process';
+import { HUMAN_LANE } from './human.js';
 import { promisify } from 'node:util';
 import http from 'node:http';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
@@ -100,7 +101,7 @@ export async function scanMachine() {
   const detected = [...axLanes, ...apiLanes, ...local];
   const clisFound = clis.filter((c) => c.found);
 
-  return { lanes: detected, clis: clisFound, platform: platform() };
+  return { lanes: [...detected, HUMAN_LANE], clis: clisFound, platform: platform() };
 }
 
 async function probeLocalServers() {

@@ -78,6 +78,7 @@ export async function cmdGo(args, flags, { cwd = process.cwd() } = {}) {
     meta: { scope: manifest },
   });
   acquireLock(record.id, { brief });
+  globalThis.CADRE_ACTIVE_RUN = record.id;
   console.log(`cadre go - run ${record.id} · ${brief}`);
   console.log(`roster · ${roster.lanes.length} lane(s)`);
   console.log(explainRouting(routing).replace(/^/gm, '  '));
@@ -95,6 +96,54 @@ export async function cmdGo(args, flags, { cwd = process.cwd() } = {}) {
   const underBudget = () => meteredTokens < budgetTokens;
 
   const byRole = Object.fromEntries(routing.assignments.map((a) => [a.role, roster.lanes.find((l) => l.name === a.lane)]));
+
+  // ---- meter preflight: downshift or wait-for-refill before spending -------
+  try {
+    const { loadMeters, pacing } = await import('../meters.js');
+    const meters = loadMeters();
+    if (meters.length) {
+      const { usageFromAudit } = await import('../meters.js');
+      const usage = usageFromAudit();
+      for (const m of meters) {
+        const p = pacing({ quota: m.quota_tokens, resetAt: m.reset_at, used: usage.get(m.lane)?.tokens || 0 });
+        if (p.state === 'empty') {
+          const hrs = ((new Date(m.reset_at) - Date.now()) / 3.6e6);
+          if (m.reset_at && hrs > 0 && hrs <= 6 && !flags.no_wait) {
+            appendLog(record.id, `METER: ${m.lane} exhausted; reset in ${hrs.toFixed(1)}h - pausing, will resume after refill`);
+            console.log(`meter · ${m.lane} empty - reset in ${hrs.toFixed(1)}h. Filing as paused-with-resume-plan (re-run after refill, or --no-wait to downshift now).`);
+            updateRun(record.id, { status: 'resumed-brief', verdict: { passed: false, summary: `paused: ${m.lane} quota empty, resets ${m.reset_at}` } });
+            return 3;
+          }
+          appendLog(record.id, `METER: ${m.lane} exhausted - roles rerouted off it`);
+          console.log(`meter · ${m.lane} empty - routing around it`);
+          // downshift: pin roles away from the empty lane by filtering it from consideration
+          roster.lanes = roster.lanes.filter((l) => l.name !== m.lane);
+          const reroute = assignRoles(roster, { brief });
+          Object.assign(byRole, Object.fromEntries(reroute.assignments.map((a) => [a.role, roster.lanes.find((l) => l.name === a.lane)])));
+        } else if (p.state === 'pacing') {
+          console.log(`meter · ${m.lane} ${p.note}`);
+        }
+      }
+    }
+  } catch (e) { console.log(`meter preflight skipped (${e.message.split('\n')[0]})`); }
+
+  // ---- 0. reuse ------------------------------------------------------------
+  console.log('\n── reuse ────────────────────────────');
+  try {
+    const { findReuse } = await import('../reuse.js');
+    const candidates = await findReuse({ brief, root: cwd });
+    if (candidates.length) {
+      appendLog(record.id, `REUSE candidates:\n${candidates.map((c) => `- [${c.source}] ${c.what} (${c.where}) - ${c.why}`).join('\n')}`);
+      console.log('before building new, reuse exists:');
+      for (const c of candidates) console.log(`  [${c.source}] ${c.what} (${c.where}) - ${c.why}`);
+      await addEvidence(record.id, { kind: 'citation', label: 'reuse survey', ref: `runs/${record.id}/run.log#reuse` });
+    } else {
+      console.log('no existing fit found - new build justified');
+      appendLog(record.id, 'REUSE: no existing fit found');
+    }
+  } catch (e) {
+    console.log(`reuse survey skipped (${e.message.split('\n')[0]})`);
+  }
 
   // ---- 1. plan -------------------------------------------------------------
   console.log('\n── plan ─────────────────────────────');
