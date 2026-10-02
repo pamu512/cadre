@@ -93,6 +93,10 @@ export function runBehaviorCheck(behavior, cwd, opts = {}) {
   if (issues.length && opts.ghRepo) {
     return { closed: null, kind: 'issue', reason: `issue check deferred: ${issues.join(', ')}` };
   }
+  if (issues.length && !opts.ghRepo) {
+    // citing an issue with no resolvable repo is an honest OPEN, not a keyword miss
+    return { closed: false, kind: 'issue', reason: `cites issue(s) ${issues.join(', ')} but no repo to query (no git origin remote; pass --gh-repo)` };
+  }
 
   // 2. test check: the behavior mentions tests -> the project's tests must pass
   if (/\btests?\b|\btest command\b|\bnpm test\b/i.test(text) && testCmd) {

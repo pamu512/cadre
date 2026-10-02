@@ -70,8 +70,8 @@ export async function cmdParity(args, flags) {
     console.log(`parity verify · ${behaviors.length} behavior(s) from ${source} against ${cwd}`);
     const { verifyContract } = await import('../behaviorcheck.js');
     const { execFile } = await import('node:child_process');
-    let ghRepo = null;
-    try {
+    let ghRepo = typeof flags['gh-repo'] === 'string' ? flags['gh-repo'] : null;
+    if (!ghRepo) try {
       const { promisify } = await import('node:util');
       const { stdout } = await promisify(execFile)('git', ['-C', cwd, 'remote', 'get-url', 'origin'], { timeout: 5000 });
       ghRepo = /[:/]([^/]+\/[^/.]+)(?:\.git)?\s*$/.exec(stdout.trim())?.[1] || null;
