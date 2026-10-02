@@ -69,31 +69,73 @@ export function renderMeters({ meters, usage }) {
 }
 
 // ---- harness-wide aggregation -------------------------------------------------
+// Per-lane burn from every observed source, with an overall aggregate.
+// FREE/LOCAL lanes (cost free, or known-local runtimes) are EXCLUDED from both
+// the split and the aggregate - they are not spend.
+const FREE_LANE_HINTS = /^(ollama|local|human|file-writer|generic|echo|free)/i;
+export function isFreeLane(name) {
+  return FREE_LANE_HINTS.test(String(name || ''));
+}
+
 export function harnessUsage() {
-  const perLane = usageFromAudit();
+  const perLane = usageFromAudit();           // chat receipts (cadre-made calls)
+  const axPerLane = new Map();                // ax run logs, attributed by section markers
   const AX_RUNS = join(homedir(), '.config/ax/runs');
-  let axTokens = 0;
+  let axUnattributed = 0;
   let axRuns = 0;
   try {
     for (const f of readdirSync(AX_RUNS)) {
       if (!f.endsWith('.log')) continue;
       let text;
       try { text = readFileSync(join(AX_RUNS, f), 'utf-8'); } catch { continue; }
+      // walk line-by-line: the last "== [lane] ..." marker attributes token lines after it
+      let currentLane = null;
       let found = false;
-      for (const m of text.matchAll(/(?:total_tokens|prompt_tokens|tokens used)[^0-9]{0,12}(\d[\d,]{3,})/g)) {
-        const n = Number(m[1].replace(/,/g, ''));
-        if (Number.isFinite(n) && n > 0) { axTokens += n; found = true; }
+      let pending = false; // "tokens used" seen; the number arrives on a LATER line
+      // raw CLI session logs (no ax sections) carry a 'model:'/'codex' header instead
+      const modelHeader = /^model:\s+(\S+)/m.exec(text);
+      const isRawCodex = /OpenAI Codex v\d/.test(text);
+      if (!currentLane && isRawCodex) currentLane = 'codex';
+      else if (!currentLane && modelHeader) {
+        const mh = modelHeader[1].split(':')[0].toLowerCase();
+        if (mh && !isFreeLane(mh) && mh !== 'gemma4') currentLane = null; // unknown model: leave unattributed
+      }
+      for (const line of text.split('\n')) {
+        const sec = /^==\s*\[([a-z-]+)\]/i.exec(line);
+        if (sec) { currentLane = sec[1].toLowerCase(); pending = false; continue; }
+        const inline = /(?:total_tokens|prompt_tokens)["']?\s*[:=]?\s*(\d[\d,]{3,})/.exec(line);
+        if (inline) { addTokens(Number(inline[1].replace(/,/g, ''))); continue; }
+        if (/tokens? used/i.test(line)) { pending = true; continue; }
+        if (pending) {
+          const bare = /^\s*(\d[\d,]{3,})\s*$/.exec(line);
+          if (bare) { addTokens(Number(bare[1].replace(/,/g, ''))); pending = false; }
+          else if (/\S/.test(line)) pending = false; // a non-number line cancels
+        }
+      }
+      function addTokens(n) {
+        if (!Number.isFinite(n) || n <= 0) return;
+        found = true;
+        if (currentLane && !isFreeLane(currentLane)) {
+          axPerLane.set(currentLane, (axPerLane.get(currentLane) || 0) + n);
+        } else if (!currentLane || isFreeLane(currentLane)) {
+          // free lane burn is excluded from spend math; no-lane stays unattributed
+          if (!currentLane) axUnattributed += n;
+        }
       }
       if (found) axRuns += 1;
     }
   } catch { /* no ax dir */ }
-  let cadreRuns = 0;
-  let cadreMetered = 0;
-  try {
-    for (const r of listRuns()) {
-      const t = r.usage?.metered_tokens;
-      if (typeof t === 'number' && t > 0) { cadreMetered += t; cadreRuns += 1; }
-    }
-  } catch { /* no ledger */ }
-  return { perLane, axTokens, axRuns, cadreMetered, cadreRuns };
+
+  // merge chat receipts into the same per-lane table (excluding free lanes)
+  const merged = new Map(axPerLane);
+  for (const [lane, v] of perLane) {
+    if (isFreeLane(lane)) continue;
+    merged.set(lane, (merged.get(lane) || 0) + v.tokens);
+  }
+
+  const paid = [...merged.entries()].map(([lane, tokens]) => ({ lane, tokens }));
+  const aggregate = paid.reduce((sum, x) => sum + x.tokens, 0) + axUnattributed;
+
+  return { perLane: paid, axUnattributed, axRuns, aggregate };
 }
+

@@ -141,9 +141,15 @@ test('meter: --set lane=<name> parses the lane= prefix (regression: literal key 
   delete process.env.CADRE_HOME;
 });
 
-test('meter: harness-wide totals aggregate chat + ax + rollup sources', async () => {
-  const { harnessUsage } = await import(join(ROOT, 'src/meters.js'));
+test('meter: per-lane split with aggregate; free lanes excluded; raw-log attribution', async () => {
+  const { harnessUsage, isFreeLane } = await import(join(ROOT, 'src/meters.js'));
   const hu = harnessUsage();
-  assert.ok(hu.axTokens >= 0 && hu.axRuns >= 0, 'ax aggregation must not throw');
-  assert.ok(hu.perLane instanceof Map, 'perLane is the receipt map');
+  assert.ok(Array.isArray(hu.perLane), 'perLane is a sorted array of {lane,tokens}');
+  assert.ok(hu.perLane.every((x) => !isFreeLane(x.lane)), 'no free/local lane in the split');
+  // aggregate = sum(split) + unattributed
+  const sum = hu.perLane.reduce((t, x) => t + x.tokens, 0) + hu.axUnattributed;
+  assert.equal(sum, hu.aggregate);
+  // free-lane detector
+  assert.ok(isFreeLane('ollama-local') && isFreeLane('human') && isFreeLane('file-writer'));
+  assert.ok(!isFreeLane('codex') && !isFreeLane('hermes'));
 });
