@@ -314,3 +314,32 @@ test('go: proof re-verifies from the run record alone (meta.cwd durability)', { 
   const r2 = await cli(h, 'proof', id);
   assert.ok(r2.stdout.includes('gate: PROVEN') || r2.stdout.includes('passed'), 'proof passes from anywhere');
 });
+
+test('go --race N: builders race in worktrees, winner diff applied, gate PROVEN', { timeout: 180000 }, async () => {
+  const h = home('race');
+  mkdirSync(join(h.dir, 'lanes'), { recursive: true });
+  for (const [name, cmd] of [['fast-writer', `/bin/sh ${join(ROOT, 'scripts/fixture-writer.sh')} {brief}`], ['slow-writer', `/bin/sh -c 'sleep 5'`]]) {
+    writeFileSync(join(h.dir, 'lanes', `${name}.json`), JSON.stringify({
+      name, good_at: ['create', 'write'], cost: 'free', talks: 'terminal', proves: 'commands',
+      invoke: { kind: 'command', command: cmd },
+    }));
+  }
+  const proj = mkdtempSync(join(tmpdir(), 'race-'));
+  writeFileSync(join(proj, 'package.json'), JSON.stringify({ name: 'race-proj', scripts: { test: 'node -e "process.exit(0)"' } }));
+  // the race needs a git repo (worktrees) with a committed base
+  const run_ = (await import('node:child_process')).execFile;
+  const prom = promisify(run_);
+  await prom('git', ['-C', proj, 'init', '-q']);
+  await prom('git', ['-C', proj, 'add', '-A']);
+  await prom('git', ['-C', proj, 'commit', '-qm', 'init']);
+  const exec = prom;
+  const { stdout } = await exec('node', [BIN, 'go', 'create raced-proof.txt containing the single line: race-e2e', '--cwd', proj, '--race', '2'], { env: h.env, cwd: ROOT, timeout: 120000 });
+  assert.ok(stdout.includes('builders racing in isolated worktrees'), 'race must start');
+  assert.ok(stdout.includes('winner'), 'a winner must be declared');
+  assert.ok(stdout.includes('gate: PROVEN'), 'gate must prove');
+  assert.ok(existsSync(join(proj, 'raced-proof.txt')), 'winner diff applied to main tree');
+  assert.equal(readFileSync(join(proj, 'raced-proof.txt'), 'utf-8').trim(), 'race-e2e');
+  // worktrees cleaned up
+  const { stdout: wls } = await exec('git', ['-C', proj, 'worktree', 'list']);
+  assert.equal(wls.trim().split('\n').length, 1, 'no leftover worktrees');
+});

@@ -46,7 +46,7 @@ function availabilityPenalty(lane) {
 // Cached per process. Lanes with only failures get a heavy penalty; thin
 // history (< 2 settled runs) gives no signal either way.
 let _histCache = null;
-function laneHistory() {
+export function laneHistory() {
   if (_histCache) return _histCache;
   const stats = new Map(); // lane -> { runs, passed }
   try {

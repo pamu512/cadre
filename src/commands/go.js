@@ -95,24 +95,6 @@ export async function cmdGo(args, flags, { cwd = process.cwd() } = {}) {
     return 0;
   }
 
-  // sweep-on-start (#13): fold compatible leftovers into this run (same brief
-  // text = compatible; their evidence attaches), retire the rest is NOT done
-  // here - incompatible leftovers stay for cadre sweep.
-  const leftovers = listRuns().filter((r) => ['running', 'interrupted'].includes(r.status));
-  if (leftovers.length > 0) {
-    const compatible = leftovers.filter((l) => l.brief === brief);
-    const incompatible = leftovers.filter((l) => l.brief !== brief);
-    for (const l of compatible) {
-      console.log(`sweep · folding leftover ${l.id} into this run (same brief; ${((l.evidence || []).length)} evidence item(s) attach)`);
-      for (const ev of l.evidence || []) await addEvidence(record.id, { ...ev, foldedFrom: l.id });
-      updateRun(l.id, { status: 'retired', ended: new Date().toISOString(), verdict: { passed: false, summary: `folded into run ${record.id}` } });
-      audit({ kind: 'sweep-fold', from: l.id, into: record.id });
-    }
-    if (incompatible.length) {
-      console.log(`sweep · ${incompatible.length} incompatible leftover(s) left for cadre sweep: ${incompatible.map((l) => l.id).join(', ')}`);
-    }
-  }
-
   const roster = await buildRoster();
   // B4/P0 #7: warm map feeds routing - hot-zone files hint which lanes fit
   let hotHint = '';
@@ -137,6 +119,24 @@ export async function cmdGo(args, flags, { cwd = process.cwd() } = {}) {
   });
   acquireLock(record.id, { brief });
   globalThis.CADRE_ACTIVE_RUN = record.id;
+  // sweep-on-start (#13): fold compatible leftovers into this run (same brief
+  // text = compatible; their evidence attaches), retire the rest is NOT done
+  // here - incompatible leftovers stay for cadre sweep.
+  const leftovers = listRuns().filter((r) => r.id !== record.id && ['running', 'interrupted'].includes(r.status));
+  if (leftovers.length > 0) {
+    const compatible = leftovers.filter((l) => l.brief === brief);
+    const incompatible = leftovers.filter((l) => l.brief !== brief);
+    for (const l of compatible) {
+      console.log(`sweep · folding leftover ${l.id} into this run (same brief; ${((l.evidence || []).length)} evidence item(s) attach)`);
+      for (const ev of l.evidence || []) await addEvidence(record.id, { ...ev, foldedFrom: l.id });
+      updateRun(l.id, { status: 'retired', ended: new Date().toISOString(), verdict: { passed: false, summary: `folded into run ${record.id}` } });
+      audit({ kind: 'sweep-fold', from: l.id, into: record.id });
+    }
+    if (incompatible.length) {
+      console.log(`sweep · ${incompatible.length} incompatible leftover(s) left for cadre sweep: ${incompatible.map((l) => l.id).join(', ')}`);
+    }
+  }
+
   console.log(`cadre go - run ${record.id} · ${brief}`);
   console.log(`roster · ${roster.lanes.length} lane(s)`);
   console.log(explainRouting(routing).replace(/^/gm, '  '));
@@ -264,16 +264,100 @@ meteredTokens += (res.usage?.total_tokens || 0);
     appendLog(record.id, `PLAN (local scaffold):\n${planText}`);
   }
 
-  // ---- 2. build ------------------------------------------------------------
+  // ---- 2. build (optionally raced across builders in isolated worktrees) ----
   console.log('\n── build ────────────────────────────');
   let changedFilesList = [];
   let diffsTextForCritic = '';
   let evidenceKindsForCritic = [];
   const before = await gitState(cwd);
   globalThis.CADRE_FS_SNAPSHOT = before ? null : fsSnapshot(cwd);
-  const builder = byRole.builder;
+  let builder = byRole.builder;
   let buildOutput = '';
-  if (builder) {
+
+  // speculative race (--race N): N file-acting builders work the same brief
+  // concurrently in isolated git worktrees; judged in fit order (changes +
+  // project tests); first PROVEN candidate is applied; losers recorded.
+  const raceN = Math.max(1, Math.min(Number(flags.race) || 1, 5));
+  let raced = false;
+  if (raceN >= 2 && before) {
+    const { scoreLane, historyPenalty, laneHistory } = await import('../router.js');
+    // rank: fit, then DEMONSTRATED RESULTS (wins), then penalty, then cost
+    const racers = roster.lanes
+      .filter((l) => ['command', 'mcp'].includes(l.invoke?.kind) && l.invoke?.status !== 'down')
+      .map((l) => {
+        const h = laneHistory().get(l.name) || { runs: 0, passed: 0 };
+        return { lane: l, s: scoreLane(l, 'builder'), hp: historyPenalty(l), wins: h.passed };
+      })
+      .sort((a, b) => (b.s.fit - a.s.fit) || (b.wins - a.wins) || (a.hp - b.hp) || ((a.s.costRank ?? 3) - (b.s.costRank ?? 3)))
+      .slice(0, raceN)
+      .map((x) => x.lane);
+    if (racers.length < 2) {
+      console.log(`race · only ${racers.length} file-acting builder(s) - racing off`);
+      appendLog(record.id, `RACE off: ${racers.length} file-acting builder(s)`);
+    } else {
+      raced = true;
+      const raceDir = join(home(), 'runs', record.id, 'race');
+      mkdirSync(raceDir, { recursive: true });
+      const slots = racers.map((l, i) => ({ lane: l, dir: join(raceDir, `wt-${i}`) }));
+      const outcomes = [];
+      let winner = null;
+      try {
+        await Promise.all(slots.map((x) => run('git', ['worktree', 'add', '--detach', x.dir, 'HEAD'], { cwd, maxBuffer: 1024 * 1024 })));
+        console.log(`race · ${slots.length} builders racing in isolated worktrees: ${slots.map((x) => x.lane.name).join(', ')}`);
+        appendLog(record.id, `RACE start: ${slots.map((x) => x.lane.name).join(', ')} (worktrees: runs/${record.id}/race/)`);
+        const settled = await Promise.allSettled(slots.map(async (x) => {
+          const res = await invokeLane(x.lane, brief, { timeoutMs: 1000 * 60 * 30, override: Boolean(flags.override), context: flags.context, cwd: x.dir, mcpAgent: Boolean(flags['mcp-agent']) });
+          return { ...x, res };
+        }));
+        const test = detectTestCommand(cwd);
+        for (let i = 0; i < settled.length; i++) {
+          const st = settled[i];
+          const slot = slots[i];
+          if (st.status !== 'fulfilled' || !st.value.res.ok) { outcomes.push(`${slot.lane.name}: build failed`); continue; }
+          const wt = await gitState(slot.dir);
+          if (!wt || wt.porcelain.trim().length === 0) { outcomes.push(`${slot.lane.name}: no changes`); continue; }
+          let testsOk = true;
+          if (test) {
+            try { await run(test.cmd, test.args, { cwd: slot.dir, timeout: 1000 * 60 * 5, maxBuffer: 1024 * 1024 * 16 }); }
+            catch { testsOk = false; }
+          }
+          if (!testsOk) { outcomes.push(`${slot.lane.name}: tests failed`); continue; }
+          outcomes.push(`${slot.lane.name}: PROVEN (winner)`);
+          winner = { slot, res: st.value.res };
+          break;
+        }
+        if (winner) {
+          await run('git', ['-C', winner.slot.dir, 'add', '-A'], { maxBuffer: 1024 * 1024 * 8 });
+          const { stdout: wdiff } = await run('git', ['-C', winner.slot.dir, 'diff', '--cached', 'HEAD'], { maxBuffer: 1024 * 1024 * 32 });
+          const patchPath = join(raceDir, 'winner.patch');
+          writeFileSync(patchPath, wdiff);
+          await run('git', ['-C', cwd, 'apply', patchPath], { maxBuffer: 1024 * 1024 * 8 });
+          builder = winner.slot.lane;
+          buildOutput = winner.res.stdout || winner.res.text || '';
+          appendLog(record.id, `BUILD (race winner ${builder.name}):\n${buildOutput.slice(0, 20000)}`);
+          appendLog(record.id, `RACE outcomes:\n  ${outcomes.join('\n  ')}`);
+          console.log(`race · winner: ${builder.name} (diff applied to the working tree)`);
+          console.log(outcomes.map((o) => `  ${o}`).join('\n'));
+          await addEvidence(record.id, { kind: 'citation', label: `race outcomes (${slots.length} builders)`, ref: `runs/${record.id}/run.log#race` });
+        } else {
+          appendLog(record.id, `RACE outcomes (no winner):\n  ${outcomes.join('\n  ')}`);
+          console.log(`race · no candidate proven:\n${outcomes.map((o) => `  ${o}`).join('\n')}`);
+          await updateRun(record.id, { status: 'failed', ended: new Date().toISOString(), verdict: { passed: false, missing: [], summary: 'race: no candidate proven' } });
+          audit({ kind: 'run-end', run: record.id, status: 'failed' });
+          releaseLock(record.id, 'race-no-winner');
+          return 1;
+        }
+      } finally {
+        for (const x of slots) { try { await run('git', ['worktree', 'remove', '--force', x.dir], { cwd, maxBuffer: 1024 * 1024 }); } catch { /* gone */ } }
+        try { await run('git', ['worktree', 'prune'], { cwd, maxBuffer: 1024 * 1024 }); } catch { /* fine */ }
+      }
+    }
+  } else if (raceN >= 2 && !before) {
+    console.log('race · needs a git repo for worktrees - racing off');
+    appendLog(record.id, 'RACE off: not a git repo (worktrees unavailable)');
+  }
+
+  if (builder && !raced) {
     try {
       console.log(`builder · ${builder.name} on the task`);
       const res = await invokeLane(builder, brief, { timeoutMs: 1000 * 60 * 30, override: Boolean(flags.override), context: flags.context, cwd, mcpAgent: Boolean(flags["mcp-agent"]) });
@@ -300,7 +384,7 @@ meteredTokens += (res.usage?.total_tokens || 0);
       releaseLock(record.id, 'build-failed');
       return 1;
     }
-  } else {
+  } else if (!raced) {
     console.error('builder · no fitting lane - roster too thin to build');
     await updateRun(record.id, { status: 'failed', ended: new Date().toISOString() });
     releaseLock(record.id, 'no-builder');
