@@ -523,3 +523,72 @@ test('parity loop report: summary row (laps, spend per lane, tokens) + stretch p
   assert.ok(summary.spend_per_lane && 'spec-builder' in summary.spend_per_lane, 'spend per lane recorded');
   assert.equal(summary.closed, 1, 'closed count recorded');
 });
+
+test('chatlane: 429 backoff honors Retry-After exactly, recovers; exhaustion throws CADRE_RATE_LIMITED', { timeout: 60000 }, async () => {
+  const http = await import('node:http');
+  let hits = 0;
+  const srv = http.createServer((req, res) => {
+    hits++;
+    if (hits <= 1) { res.writeHead(429, { 'retry-after': '1' }); res.end('{}'); return; }
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ choices: [{ message: { content: 'OK' } }], usage: { total_tokens: 1 }, model: 'm' }));
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const port = srv.address().port;
+  const prevKey = process.env.QH_MOCK_KEY;
+  process.env.QH_MOCK_KEY = 'k';
+  try {
+    const { chatLane } = await import(join(ROOT, 'src/chatlane.js'));
+    const t0 = Date.now();
+    const r = await chatLane({ name: 't-429', invoke: { kind: 'openai-compatible', base_url: `http://127.0.0.1:${port}/v1`, api_key_env: 'QH_MOCK_KEY', model: 'm' } }, [{ role: 'user', content: 'x' }], { maxRetries: 3 });
+    const ms = Date.now() - t0;
+    assert.equal(r.text, 'OK');
+    assert.equal(hits, 2, 'exactly one retry');
+    assert.ok(ms >= 1000, `Retry-After honored (waited ${ms}ms)`);
+    // exhaustion: always-429
+    hits = 0;
+    const srv2 = http.createServer((q, s) => { hits++; s.writeHead(429, { 'retry-after': '0' }); s.end('{}'); });
+    await new Promise((r2) => srv2.listen(0, '127.0.0.1', r2));
+    const p2 = srv2.address().port;
+    let threw = null;
+    await chatLane({ name: 't-429b', invoke: { kind: 'openai-compatible', base_url: `http://127.0.0.1:${p2}/v1`, api_key_env: 'QH_MOCK_KEY', model: 'm' } }, [{ role: 'user', content: 'x' }], { maxRetries: 1 }).catch((e) => { threw = e; });
+    assert.equal(threw?.code, 'CADRE_RATE_LIMITED', 'exhaustion throws CADRE_RATE_LIMITED');
+    srv2.close();
+  } finally {
+    if (prevKey === undefined) delete process.env.QH_MOCK_KEY; else process.env.QH_MOCK_KEY = prevKey;
+    srv.close();
+  }
+});
+
+test('go: quiet hours enforced - refuses to spend, files paused-with-resume-plan', { timeout: 120000 }, async () => {
+  const h = home('quiet');
+  mkdirSync(join(h.dir, 'lanes'), { recursive: true });
+  writeFileSync(join(h.dir, 'lanes', 'file-writer.json'), JSON.stringify({
+    name: 'file-writer', good_at: ['create', 'write'], cost: 'free', talks: 'terminal', proves: 'commands',
+    invoke: { kind: 'command', command: `/bin/sh ${join(ROOT, 'scripts/fixture-writer.sh')} {brief}` },
+  }));
+  // a window that always contains NOW: start 23h ago, end 1h from now (wraps midnight)
+  const now = new Date();
+  const fmt = (d) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  const s = new Date(now.getTime() - 23 * 3600e3);
+  const e = new Date(now.getTime() + 1 * 3600e3);
+  writeFileSync(join(h.dir, 'pins.json'), JSON.stringify({ roles: {}, budget: null, quiet_hours: { start: fmt(s), end: fmt(e) } }));
+  const proj = mkdtempSync(join(tmpdir(), 'quiet-'));
+  writeFileSync(join(proj, 'package.json'), JSON.stringify({ name: 'p', scripts: { test: 'true' } }));
+  const r = await cli(h, 'go', 'create quiet.txt with proof', '--cwd', proj);
+  assert.ok(r.stdout.includes('quiet hours'), 'refusal message shown');
+  const runs = readdirSync(join(h.dir, 'runs')).sort();
+  const rec = JSON.parse(readFileSync(join(h.dir, 'runs', runs[runs.length - 1], 'run.json'), 'utf-8'));
+  assert.equal(rec.status, 'resumed-brief');
+  assert.ok(rec.verdict.summary.includes('quiet hours'));
+  assert.ok(!existsSync(join(proj, 'quiet.txt')), 'no spend happened');
+});
+
+test('meters: rateGuard sliding window enforces rpm', { timeout: 30000 }, async () => {
+  const { rateGuard } = await import(join(ROOT, 'src/meters.js'));
+  const lane = 'rg-test-' + Date.now();
+  const results = [];
+  for (let i = 0; i < 5; i++) results.push(await rateGuard(lane, { rpm: 2 }));
+  assert.equal(results.filter(Boolean).length, 2, 'only rpm ceiling passes immediately');
+  assert.ok(results.slice(2).includes(false), 'beyond ceiling refused');
+});

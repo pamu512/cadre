@@ -180,6 +180,32 @@ export async function cmdGo(args, flags, { cwd = process.cwd() } = {}) {
   }
 
 
+  // ---- quiet hours: refuse to spend inside the window (unless --override) --
+  // the 3am promise: unattended loops don't burn quotas while you sleep.
+  try {
+    const pinsQ = loadPins().quiet_hours;
+    if (pinsQ && !flags.override) {
+      const now = new Date();
+      const mins = now.getHours() * 60 + now.getMinutes();
+      const [sh, sm] = String(pinsQ.start || '23:00').split(':').map(Number);
+      const [eh, em] = String(pinsQ.end || '07:00').split(':').map(Number);
+      const start = sh * 60 + (sm || 0);
+      const end = eh * 60 + (em || 0);
+      const inside = start <= end ? (mins >= start && mins < end) : (mins >= start || mins < end); // overnight window wraps
+      if (inside) {
+        console.log(`quiet hours · inside ${pinsQ.start}–${pinsQ.end} - refusing to spend; filing paused-with-resume-plan (--override to break glass)`);
+        appendLog(record.id, `QUIET HOURS: inside ${pinsQ.start}-${pinsQ.end} - paused before any spend`);
+        updateRun(record.id, { status: 'resumed-brief', verdict: { passed: false, summary: `paused: quiet hours ${pinsQ.start}-${pinsQ.end}` } });
+        audit({ kind: 'quiet-hours-refusal', run: record.id, window: `${pinsQ.start}-${pinsQ.end}` });
+        releaseLock(record.id, 'quiet-hours');
+        return 3;
+      }
+    } else if (pinsQ && flags.override) {
+      console.log(`quiet hours · ${pinsQ.start}–${pinsQ.end} active but --override passed - proceeding (recorded)`);
+      appendLog(record.id, `QUIET HOURS override: proceeding inside ${pinsQ.start}-${pinsQ.end} by explicit flag`);
+    }
+  } catch { /* quiet-hours check is best-effort */ }
+
   // ---- meter preflight: downshift or wait-for-refill before spending -------
   try {
     const { loadMeters, pacing } = await import('../meters.js');

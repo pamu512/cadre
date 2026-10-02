@@ -139,3 +139,36 @@ export function harnessUsage() {
   return { perLane: paid, axUnattributed, axRuns, aggregate };
 }
 
+
+// ---- rate-limit meters --------------------------------------------------------
+// request-rate ceilings declared per lane (rpm/rps). The chat driver calls
+// rateGuard BEFORE each request; it delays until the sliding window has room
+// or returns false when waiting would exceed the cap. Never invents a 429.
+const rateLog = new Map(); // lane -> [tsMs, ...] of recent request starts
+export async function rateGuard(laneName, { rpm = null, rps = null, maxWaitMs = 30000 } = {}) {
+  if (!rpm && !rps) return true;
+  const now = Date.now();
+  const log = (rateLog.get(laneName) || []).filter((t) => now - t < 60000);
+  const check = () => {
+    if (rps) {
+      const lastSec = log.filter((t) => now - t < 1000).length;
+      if (lastSec >= rps) return false;
+    }
+    if (rpm) {
+      if (log.length >= rpm) return false;
+    }
+    return true;
+  };
+  if (check()) {
+    log.push(now);
+    rateLog.set(laneName, log);
+    return true;
+  }
+  // wait until the oldest request ages out of the stricter window, then retry once
+  const waitMs = rps
+    ? 1000 - (now - log[log.length - Math.ceil(rps)])
+    : 60000 - (now - log[0]);
+  if (!Number.isFinite(waitMs) || waitMs <= 0 || waitMs > maxWaitMs) return false;
+  await new Promise((r) => setTimeout(r, Math.ceil(waitMs)));
+  return rateGuard(laneName, { rpm, rps, maxWaitMs: 0 }); // one retry, no further wait
+}

@@ -34,6 +34,9 @@ export function chatLaneAvailable(lane) {
 }
 
 // messages -> { text, usage, model }. Throws CADRE_SKIP when unkeyed.
+// 429/5xx-aware: honors Retry-After, exponential backoff with jitter, up to
+// opts.maxRetries (default 3). A rate-limited lane exhausts retries and
+// throws CADRE_RATE_LIMITED so the fallback chain can downshift honestly.
 export async function chatLane(lane, messages, opts = {}) {
   const { key, url, model: laneModel } = resolveChat(lane);
   if (!key) {
@@ -48,14 +51,59 @@ export async function chatLane(lane, messages, opts = {}) {
     temperature: opts.temperature ?? 0.3,
     max_tokens: opts.max_tokens ?? 2048,
   });
-  const payload = await postJson(url, {
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${key}`, 'user-agent': 'cadre/0.2' },
-    body,
-    timeoutMs: opts.timeoutMs ?? 120000,
-  });
-  const text = payload.choices?.[0]?.message?.content;
-  if (typeof text !== 'string') throw new Error(`${lane.name}: unexpected response shape (no choices[0].message.content)`);
-  return { text, usage: payload.usage || null, model: payload.model || model, lane: lane.name };
+  const maxRetries = opts.maxRetries ?? 3;
+  let lastErr = null;
+  // rate-limit meter: if this lane has a declared rpm/rps ceiling, wait for
+  // window room instead of slamming the provider into a 429
+  try {
+    const { loadMeters, rateGuard } = await import('./meters.js');
+    const m = loadMeters().find((x) => x.lane === lane.name);
+    if (m && (m.rpm || m.rps)) {
+      const okToGo = await rateGuard(lane.name, { rpm: m.rpm, rps: m.rps });
+      if (!okToGo) {
+        const err = new Error(`${lane.name}: rate-limit meter exhausted (${m.rpm ? m.rpm + ' rpm' : ''}${m.rpm && m.rps ? ' / ' : ''}${m.rps ? m.rps + ' rps' : ''}) - refusing to send rather than eat a 429`);
+        err.code = 'CADRE_RATE_LIMITED';
+        throw err;
+      }
+    }
+  } catch (e) {
+    if (e.code === 'CADRE_RATE_LIMITED') throw e;
+    /* meter lookup best-effort */
+  }
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    if (attempt > 0) {
+      // Retry-After is the SERVER'S instruction: honor it at face value.
+      // Jitter (0.5-1.5x) applies only to our own exponential guesses.
+      const waitMs = lastErr.retryAfterMs ?? Math.round(Math.min(60000, 1000 * 2 ** (attempt - 1)) * (0.5 + Math.random()));
+      await new Promise((r) => setTimeout(r, waitMs));
+    }
+    try {
+      const payload = await postJson(url, {
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${key}`, 'user-agent': 'cadre/0.2' },
+        body,
+        timeoutMs: opts.timeoutMs ?? 120000,
+      });
+      const text = payload.choices?.[0]?.message?.content;
+      if (typeof text !== 'string') throw new Error(`${lane.name}: unexpected response shape (no choices[0].message.content)`);
+      return { text, usage: payload.usage || null, model: payload.model || model, lane: lane.name };
+    } catch (e) {
+      lastErr = e;
+      const retriable = e.statusCode === 429 || (e.statusCode >= 500 && e.statusCode < 600);
+      if (e.statusCode === 429) {
+        const ra = Number(e.retryAfterSec);
+        e.retryAfterMs = Number.isFinite(ra) && ra > 0 ? Math.min(120000, ra * 1000) : undefined;
+      }
+      if (!retriable || attempt === maxRetries) {
+        if (e.statusCode === 429) {
+          const err = new Error(`${lane.name}: rate-limited (429) after ${attempt + 1} attempt(s) - backoff exhausted`);
+          err.code = 'CADRE_RATE_LIMITED';
+          throw err;
+        }
+        throw e;
+      }
+    }
+  }
+  throw lastErr;
 }
 
 function postJson(url, { headers, body, timeoutMs }) {
@@ -69,6 +117,8 @@ function postJson(url, { headers, body, timeoutMs }) {
         if (res.statusCode < 200 || res.statusCode >= 300) {
           const err = new Error(`${url.host}: HTTP ${res.statusCode} ${text.slice(0, 300)}`);
           err.statusCode = res.statusCode;
+          const ra = Number(res.headers['retry-after']);
+          if (Number.isFinite(ra) && ra > 0) err.retryAfterSec = ra;
           reject(err);
           return;
         }

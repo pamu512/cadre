@@ -28,7 +28,9 @@ export async function cmdMeter(args, flags) {
       lane: m, provider: flags.provider || null,
       quota_tokens: quota, reset_at: flags.reset || null,
       rollover_tokens: flags.rollover ? Number(flags.rollover) : null,
-      rail: flags.rail || 'official', // official = read off your dashboard; header = flagged fallback
+      rpm: flags.rpm ? Number(flags.rpm) : null,   // requests/min ceiling (rate-limit meter)
+      rps: flags.rps ? Number(flags.rps) : null,   // requests/sec ceiling
+      rail: flags.rail || 'official', // official = read off your provider dashboard; header = flagged fallback
       updated: new Date().toISOString(),
     };
     saveMeters([...meters.filter((x) => x.lane !== m), entry]);
