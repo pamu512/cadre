@@ -1,4 +1,5 @@
 // frugal - B5, the compressed-output discipline/output-filtering take: compress tool output before it enters
+// byte accounting is restorable: every cut byte is backed up and counted
 // run.log or model context. Two donor rules baked in:
 //   compressed-output discipline: every squeezed byte keeps a restorable backup - never destroy
 //   output-filtering:     if a "compression" would make output BIGGER, keep the original silently

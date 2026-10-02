@@ -56,7 +56,7 @@ test('P0#8/B8: builder-only command evidence fails the gate; mixed passes', asyn
       { kind: 'command', label: 'x', command: 'true', exit: 0, output: 'ok', by: 'the-builder' },
       { kind: 'diff', label: 'f', path: 'f', plus: 3, minus: 1 },
       { kind: 'artifact', label: 'README.md', path: 'README.md' },
-      { kind: 'citation', label: 'c', ref: 'runs/0001/run.log' },
+      { kind: 'citation', label: 'c', ref: 'README.md' },
     ],
   };
   const bad = gateVerdict(base);
@@ -145,4 +145,21 @@ test('P2#14: parity --dry extracts the behavior contract from the ref', async ()
   assert.ok(r.stdout.includes('contract:'), 'must show the contract');
   assert.ok(r.stdout.includes('behavior one'));
   assert.ok(r.stdout.includes('pipeline: extract contract'));
+});
+
+// ---- citation-ref existence at the gate ---------------------------------------
+test('gate: bogus citation ref fails the citations family; real ref passes', async () => {
+  const { gateVerdict } = await import(join(ROOT, 'src/gate.js'));
+  const base = { roles: {}, evidence: [
+    { kind: 'command', command: 'true', exit: 0, output: 'ok' },
+    { kind: 'diff', path: 'f', plus: 2, minus: 1 },
+    { kind: 'artifact', label: 'README.md', path: 'README.md' },
+  ] };
+  const bogus = gateVerdict({ ...base, evidence: [...base.evidence, { kind: 'citation', label: 'x', ref: 'no/such/file.anywhere' }] });
+  assert.ok(!bogus.passed, 'bogus ref must fail');
+  assert.ok(bogus.failed.some((f) => f.family === 'citations' && String(f.detail).includes('missing at gate time')));
+  const real = gateVerdict({ ...base, evidence: [...base.evidence, { kind: 'citation', label: 'r', ref: 'README.md' }] });
+  assert.ok(real.passed, 'real ref must pass');
+  const http = gateVerdict({ ...base, evidence: [...base.evidence, { kind: 'citation', label: 'u', ref: 'https://example.com/x' }] });
+  assert.ok(http.passed, 'http refs are followable, must pass');
 });

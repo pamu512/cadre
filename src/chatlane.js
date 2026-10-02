@@ -15,7 +15,13 @@ export function resolveChat(lane) {
   const inv = lane.invoke || {};
   const envName = inv.api_key_env || inv.env || lane.env;
   const key = envName ? process.env[envName] || null : null;
-  let base = inv.base_url || inv.endpoint || lane.endpoint || '';
+  // base URL: direct, or indirect via base_url_env (and APERTUS-style defaults)
+  let base = inv.base_url;
+  if (!base && inv.base_url_env) base = process.env[inv.base_url_env];
+  if (!base && (envName || inv.base_url_env)) {
+    // legacy default for endpoint-style lanes that declare an env but no base
+    base = null;
+  }
   if (!base) return { key, url: null, model: inv.model || lane.model };
   base = base.replace(/\/+$/, '');
   const url = new URL(base.endsWith('/v1') ? base + '/chat/completions' : base + '/v1/chat/completions');

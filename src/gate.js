@@ -6,7 +6,8 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { isAbsolute, resolve } from 'node:path';
+import { isAbsolute, resolve, join } from 'node:path';
+import { homedir } from 'node:os';
 
 const run = promisify(execFile);
 
@@ -73,6 +74,20 @@ export function gateVerdict(runRecord, { cwd = process.cwd() } = {}) {
     if (!existsSync(p)) {
       c.ok = false;
       c.detail += ' - file missing at gate time';
+      failed.push({ ...c });
+    }
+  }
+
+  // citation-ref existence: a citation that points nowhere is a failed check,
+  // not a passed one (refs may be relative to cwd, to CADRE_HOME, or ~/ paths)
+  for (const c of checks.filter((c) => c.family === 'citations' && c.ok)) {
+    const raw = String(c.detail || '');
+    const expanded = raw.replace(/^~\//, homedir() + '/');
+    const cands = [expanded, resolve(cwd, raw), resolve(process.env.CADRE_HOME || join(homedir(), '.cadre'), raw.replace(/^runs\//, ''))];
+    const exists = cands.some((p2) => existsSync(p2)) || /^https?:\/\//.test(raw);
+    if (!exists) {
+      c.ok = false;
+      c.detail += ' - cited ref missing at gate time';
       failed.push({ ...c });
     }
   }

@@ -211,7 +211,7 @@ test('gate: verdict requires all four evidence families', async () => {
   const missing = gateVerdict(base);
   assert.equal(missing.passed, false);
   assert.deepEqual(missing.missing, ['citations']);
-  const full = gateVerdict({ evidence: [...base.evidence, { kind: 'citation', ref: 'runs/0001/run.log' }] });
+  const full = gateVerdict({ evidence: [...base.evidence, { kind: 'citation', ref: 'README.md' }] });
   assert.equal(full.passed, true);
 });
 
