@@ -10,6 +10,7 @@ import { cmdSweep } from '../src/commands/sweep.js';
 import { cmdMap } from '../src/commands/map.js';
 import { cmdWatch } from '../src/commands/watch.js';
 import { cmdProof } from '../src/commands/proof.js';
+import { cmdMetrics } from '../src/commands/metrics.js';
 import { cmdDebate } from '../src/commands/debate.js';
 import { cmdPin } from '../src/commands/pin.js';
 import { cmdMcp } from '../src/commands/mcp.js';
@@ -63,6 +64,7 @@ async function main() {
     case 'map': return cmdMap(_, flags);
     case 'watch': return cmdWatch(_, flags);
     case 'proof': return cmdProof(_, flags);
+    case 'metrics': return cmdMetrics(_, flags);
     case 'debate': return cmdDebate(_, flags);
     case 'pin': return cmdPin(_, flags);
     case 'mcp': return cmdMcp(_, flags);

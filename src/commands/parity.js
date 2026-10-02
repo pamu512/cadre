@@ -5,13 +5,28 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { existsSync } from 'node:fs';
-import { createRun, updateRun, appendLog, addEvidence, audit } from '../store.js';
+import { existsSync, appendFileSync, mkdirSync } from 'node:fs';
+import { createRun, updateRun, appendLog, addEvidence, audit, home } from '../store.js';
 
 const run = promisify(execFile);
 const AX = process.env.CADRE_AX || join(homedir(), '.local/bin/ax');
 
 export async function cmdParity(args, flags) {
+  // B6: cadre parity --ledger renders the parity ledger (no build)
+  if (flags.ledger) {
+    const { readFileSync } = await import('node:fs');
+    const p = join(home(), 'parity-ledger.jsonl');
+    if (!existsSync(p)) { console.log(`no parity ledger yet (${p})`); return 0; }
+    const lines = readFileSync(p, 'utf-8').split('\n').filter(Boolean);
+    console.log(`parity ledger · ${lines.length} entr${lines.length === 1 ? 'y' : 'ies'} (${p})`);
+    for (const l of lines) {
+      try {
+        const e = JSON.parse(l);
+        console.log(`  ${e.ts}  run ${e.run}  ${String(e.verdict).padEnd(8)} ref ${(e.ref || '—').padEnd(24)} ${e.evidence_count} ev ${e.citation || ''}`);
+      } catch { console.log(`  (unparseable line: ${l.slice(0, 60)})`); }
+    }
+    return 0;
+  }
   const target = args.join(' ').trim();
   if (!target) {
     console.error('cadre parity "<outcome>" --ref <reference>');
@@ -46,20 +61,47 @@ export async function cmdParity(args, flags) {
 
   appendLog(record.id, `PARITY ref=${ref}`);
   audit({ kind: 'parity-start', run: record.id, ref });
+  // B6 parity ledger: this run's outcome gets appended to parity-ledger.jsonl
+  const appendLedger = (verdict) => {
+    const ledgerPath = join(home(), 'parity-ledger.jsonl');
+    mkdirSync(home(), { recursive: true });
+    appendFileSync(ledgerPath, JSON.stringify({
+      ts: new Date().toISOString(),
+      run: record.id,
+      target: target.slice(0, 200),
+      ref,
+      verdict,
+      evidence_count: (record.evidence || []).length,
+      citation: axRunOfVerdict,
+    }) + '\n');
+  };
+  let axRunOfVerdict = null;
 
   try {
-    const { stdout } = await run(AX, ['build', task], { timeout: 1000 * 60 * 30, maxBuffer: 1024 * 1024 * 32 });
+    const axArgs = ['build', task];
+    if (flags.override) axArgs.push('--override');
+    const { stdout } = await run(AX, axArgs, { timeout: 1000 * 60 * 30, maxBuffer: 1024 * 1024 * 32 });
     process.stdout.write(stdout.split('\n').slice(-25).join('\n').replace(/^/gm, '  ') + '\n');
     const axRun = /run-\d{8}-\d{6}-\d+/.exec(stdout);
+    axRunOfVerdict = axRun ? axRun[0] : null;
     await addEvidence(record.id, { kind: 'citation', label: 'ax build log', ref: axRun ? `~/.config/ax/runs/${axRun[0]}` : 'ax build stdout (filed in run.log)' });
     appendLog(record.id, `BUILD:\n${stdout.slice(0, 20000)}`);
-    const approved = /CONSENSUS: APPROVE/.test(stdout);
+    // Verdict: the FINAL evidence-gate block decides — an upstream APPROVE line
+    // (e.g. "pre-approved by debate") is not the verdict. UNEVIDENCED always rejects.
+    const gateBlocks = stdout.split(/evidence gate/);
+    const lastGate = gateBlocks.length > 1 ? gateBlocks[gateBlocks.length - 1] : '';
+    const unevidenced = /UNEVIDENCED|VERDICT: (INCOMPLETE|REJECT)/i.test(lastGate);
+    const approved = !unevidenced && /CONSENSUS: APPROVE/.test(lastGate);
+    if (unevidenced && /CONSENSUS: APPROVE/.test(stdout)) {
+      appendLog(record.id, 'GATE NOTE: upstream APPROVE line ignored - final evidence gate says UNEVIDENCED, rejecting');
+    }
     updateRun(record.id, {
       status: approved ? 'passed' : 'rejected',
       verdict: { passed: approved, summary: approved ? 'ax build approved with citations' : 'ax build did not approve' },
       ended: new Date().toISOString(),
     });
     console.log(approved ? `\n✓ parity run ${record.id} - build approved; citation filed (${axRun ? axRun[0] : 'stdout'})` : `\n✗ parity run ${record.id} - build not approved`);
+    appendLedger(approved ? 'approved' : 'rejected');
     return approved ? 0 : 1;
   } catch (e) {
     const out = String(e.stdout || '');
@@ -67,6 +109,7 @@ export async function cmdParity(args, flags) {
     updateRun(record.id, { status: 'failed', ended: new Date().toISOString() });
     process.stderr.write(out.split('\n').slice(-10).join('\n') + '\n');
     console.error(`cadre: ax build failed (exit ${e.code})`);
+    appendLedger('failed');
     return e.code || 1;
   }
 }

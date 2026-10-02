@@ -354,3 +354,77 @@ test('economicOrder: included-first ordering', async () => {
   const lanes = [{ name: 'b', cost: 'metered' }, { name: 'c', cost: 'free' }, { name: 'a', cost: 'plan' }, { name: 'd', cost: 'coffee' }];
   assert.deepEqual(economicOrder(lanes).map((l) => l.cost), ['free', 'plan', 'metered', 'coffee']);
 });
+
+// ---- beyond-parity B1/B6/B7 --------------------------------------------------
+test('B1 metrics: computes real numbers from a fabricated ledger', async () => {
+  const h = home('metrics');
+  process.env.CADRE_HOME = h.dir;
+  try {
+    const { createRun, updateRun, addEvidence } = await import(join(ROOT, 'src/store.js'));
+    const a = createRun({ brief: 'a', kind: 'go' });
+    await addEvidence(a.id, { kind: 'command', label: 'npm test', command: 'npm test', exit: 0, output: 'ok' });
+    updateRun(a.id, { status: 'rejected', ended: new Date().toISOString() });
+    const b = createRun({ brief: 'b', kind: 'go' });
+    updateRun(b.id, { status: 'passed', ended: new Date().toISOString(), usage: { metered_tokens: 300 } });
+    const c = createRun({ brief: 'c', kind: 'go' });
+    updateRun(c.id, { status: 'passed', ended: new Date().toISOString(), usage: { metered_tokens: 100 } });
+    const { computeMetrics } = await import(join(ROOT, 'src/commands/metrics.js'));
+    const m = computeMetrics();
+    assert.equal(m.runs_settled, 3);
+    assert.equal(m.false_done_count, 1);       // only the rejected run with command evidence
+    assert.ok(Math.abs(m.false_done_rate - 1 / 3) < 1e-9);
+    assert.equal(m.passed_runs, 2);
+    assert.equal(m.metered_burn_per_passed_run, 200);
+    assert.ok(m.median_settle_seconds >= 0);
+  } finally {
+    delete process.env.CADRE_HOME;
+  }
+});
+
+test('B1 metrics CLI: dash for absent data, no invented numbers', async () => {
+  const h = home('metrics-cli');
+  const r = await cli(h, 'metrics');
+  assert.equal(r.rc, 0);
+  assert.ok(r.stdout.includes('—'));
+  const j = JSON.parse((await cli(h, 'metrics', '--json')).stdout);
+  assert.equal(j.runs_total, 0);
+});
+
+test('B7 sweep --resume emits a resume-plan artifact', async () => {
+  const h = home('resume-plan');
+  process.env.CADRE_HOME = h.dir;
+  try {
+    const { createRun, updateRun, appendLog, addEvidence } = await import(join(ROOT, 'src/store.js'));
+    const r = createRun({ brief: 'leftover "quoted" work', kind: 'go' });
+    appendLog(r.id, 'PLAN (local scaffold):\n1. step');
+    await addEvidence(r.id, { kind: 'citation', label: 'x', ref: 'runs/x' });
+    updateRun(r.id, { status: 'interrupted' });
+    const { cmdSweep } = await import(join(ROOT, 'src/commands/sweep.js'));
+    const rc = await cmdSweep([], { resume: r.id });
+    assert.equal(rc, 0);
+    const plan = JSON.parse(readFileSync(join(h.dir, 'runs', r.id, 'resume-plan.json'), 'utf-8'));
+    assert.equal(plan.id, r.id);
+    assert.deepEqual(plan.steps_logged, ['PLAN']);
+    assert.deepEqual(plan.steps_remaining, ['BUILD', 'CRITIQUE', 'VERIFY', 'GATE']);
+    assert.equal(plan.evidence_kept.length, 1);
+    assert.ok(plan.rebrief_command.includes('\\"quoted\\"'));
+    assert.ok(plan.honest_note.includes('not resumable mid-pipeline'));
+  } finally {
+    delete process.env.CADRE_HOME;
+  }
+});
+
+test('B6 parity --ledger renders entries and tolerates an empty ledger', async () => {
+  const h = home('pledger');
+  const empty = await cli(h, 'parity', '--ledger');
+  assert.equal(empty.rc, 0);
+  assert.ok(empty.stdout.includes('no parity ledger yet'));
+  // fabricate one entry
+  const { mkdirSync } = await import('node:fs');
+  mkdirSync(join(h.dir), { recursive: true });
+  writeFileSync(join(h.dir, 'parity-ledger.jsonl'),
+    JSON.stringify({ ts: '2026-10-02T00:00:00Z', run: '0042', target: 't', ref: 'docs/PRD-v0.2.md', verdict: 'approved', evidence_count: 4, citation: 'run-1' }) + '\n');
+  const shown = await cli(h, 'parity', '--ledger');
+  assert.ok(shown.stdout.includes('0042'));
+  assert.ok(shown.stdout.includes('approved'));
+});

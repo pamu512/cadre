@@ -58,9 +58,28 @@ export async function cmdSweep(args, flags) {
     const id = String(flags.resume);
     const run = listRuns().find((r) => r.id === id);
     if (!run) { console.error(`no run ${id} under ${home()}`); return 1; }
+    // B7 resume honesty: emit a resume-plan artifact — evidence kept, steps not
+    // yet logged, the exact re-brief command. No magic mid-pipeline resume.
+    const logged = (() => {
+      try { return readFileSync(join(runDir(id), 'run.log'), 'utf-8'); } catch { return ''; }
+    })();
+    const stepsLogged = ['PLAN', 'BUILD', 'CRITIQUE', 'VERIFY', 'GATE'].filter((s) => logged.includes(s));
+    const stepsRemaining = ['PLAN', 'BUILD', 'CRITIQUE', 'VERIFY', 'GATE'].filter((s) => !stepsLogged.includes(s));
+    const plan = {
+      id,
+      brief: run.brief,
+      evidence_kept: (run.evidence || []).map((e) => ({ kind: e.kind, label: e.label || e.path || e.ref || e.command })),
+      steps_logged: stepsLogged,
+      steps_remaining: stepsRemaining,
+      rebrief_command: `cadre go "${String(run.brief).replace(/"/g, '\\"')}"`,
+      honest_note: 'cadre runs are not resumable mid-pipeline; resume = re-brief with prior evidence attached',
+      generated: new Date().toISOString(),
+    };
+    writeFileSync(join(runDir(id), 'resume-plan.json'), JSON.stringify(plan, null, 2));
     updateRun(id, { status: 'resumed-brief', ended: new Date().toISOString() });
     audit({ kind: 'sweep-resume', run: id });
-    console.log(`run ${id} marked for re-brief: cadre go "${run.brief}"`);
+    console.log(`run ${id} marked for re-brief: ${plan.rebrief_command}`);
+    console.log(`  resume plan: ${join(runDir(id), 'resume-plan.json')} (${plan.evidence_kept.length} evidence kept, ${plan.steps_remaining.length} step(s) remaining)`);
     return 0;
   }
 
