@@ -498,3 +498,28 @@ test('parity --until-proven: every lap lands ledger rows (cited on close, reason
   const closed = loopRows.find((l) => String(l.verdict).startsWith('behavior-closed'));
   assert.ok(closed && closed.citation, 'closed rows carry a citation');
 });
+
+test('parity loop report: summary row (laps, spend per lane, tokens) + stretch proposed, never smuggled; headings are not stretch items', { timeout: 240000 }, async () => {
+  const h = home('loopreport');
+  mkdirSync(join(h.dir, 'lanes'), { recursive: true });
+  writeFileSync(join(h.dir, 'lanes', 'spec-builder.json'), JSON.stringify({
+    name: 'spec-builder', good_at: ['create', 'write'], cost: 'free', talks: 'terminal', proves: 'commands',
+    invoke: { kind: 'command', command: `/bin/sh ${join(ROOT, 'scripts/spec-fixture.sh')} {brief}` },
+  }));
+  const proj = mkdtempSync(join(tmpdir(), 'loopreport-'));
+  writeFileSync(join(proj, 'package.json'), JSON.stringify({ name: 'p', scripts: { test: 'node -e "process.exit(0)"' } }));
+  writeFileSync(join(proj, 'SPEC.md'), '# Spec\n\n- create hello.txt containing greeting text\n\n# Stretch\n\n- add a web dashboard with charts\n');
+  const r = await cli(h, 'parity', 'match', '--ref', join(proj, 'SPEC.md'), '--cwd', proj, '--until-proven', '--max-iter', '2');
+  assert.ok(r.stdout.includes('ALL BEHAVIORS CLOSED'));
+  assert.ok(r.stdout.includes('stretch item(s) PROPOSED'), 'stretch surfaced as proposals');
+  assert.ok(!r.stdout.includes('~ Stretch'), 'no heading pseudo-item');
+  const rows = readFileSync(join(h.dir, 'parity-ledger.jsonl'), 'utf-8').trim().split('\n').map((l) => JSON.parse(l));
+  const stretch = rows.filter((x) => x.run === 'stretch');
+  assert.equal(stretch.length, 1, 'exactly the one real stretch item');
+  assert.equal(stretch[0].verdict, 'stretch-proposed');
+  const summary = rows.filter((x) => x.run === 'loop-summary').pop();
+  assert.ok(summary, 'summary row exists');
+  assert.equal(summary.laps_burned, 2, 'laps burned recorded');
+  assert.ok(summary.spend_per_lane && 'spec-builder' in summary.spend_per_lane, 'spend per lane recorded');
+  assert.equal(summary.closed, 1, 'closed count recorded');
+});

@@ -109,12 +109,28 @@ export async function cmdParity(args, flags) {
     }
     const cwd = typeof flags.cwd === 'string' ? flags.cwd : process.cwd();
     const maxIter = Math.max(1, Math.min(Number(flags['max-iter']) || 5, 20));
-    const extract = () => readFileSync(ref, 'utf-8').split('\n')
-      .map((l) => l.trim())
-      .filter((l) => /^([-*]\s+\S|^#{1,4}\s+\S|\S)/.test(l))
-      .filter((l) => l.length > 8 && !/^[-*=#]{3,}$/.test(l))
-      .slice(0, 40)
-      .map((l) => l.replace(/^#{1,4}\s+/, '').replace(/^[-*]\s+/, ''));
+    // stretch detection: bullets under an explicit stretch/future/non-goal/
+    // nice-to-have heading are PROPOSED, never part of parity - they can't
+    // block closure and the loop never builds them.
+    const extractFull = () => {
+      const lines = readFileSync(ref, 'utf-8').split('\n').map((l) => l.trim());
+      const core = [];
+      const stretch = [];
+      let inStretch = false;
+      for (const l of lines) {
+        if (/^#{1,4}\s+/.test(l)) {
+          // headings set core/stretch mode; they are never behaviors themselves
+          inStretch = /stretch|future|non-goal|nice-to-have|later|out of scope/i.test(l);
+          continue;
+        }
+        if (/^[-*=#]{3,}$/.test(l) || l.length <= 8) continue;
+        const clean = l.replace(/^[-*]\s+/, '');
+        if (!clean || !/^\S/.test(clean)) continue;
+        (inStretch ? stretch : core).push(clean);
+      }
+      return { core: core.slice(0, 40), stretch: stretch.slice(0, 15) };
+    };
+    const extract = () => extractFull().core;
     const { verifyContract } = await import('../behaviorcheck.js');
     const testCmd = (() => {
       try {
@@ -149,20 +165,52 @@ export async function cmdParity(args, flags) {
         }) + '\n');
       }
     };
+    const fileSummary = () => {
+      appendFileSync(ledgerPath, JSON.stringify({
+        ts: new Date().toISOString(), run: 'loop-summary', ref,
+        verdict: 'loop-summary', evidence_count: 0,
+        laps_burned: lapsBurned, closed: lastClosed, open: lastOpen,
+        metered_tokens: meteredTokens, budget_tokens: budgetTokens,
+        spend_per_lane: Object.fromEntries(laneSpend),
+        citation: '',
+      }) + '\n');
+      console.log(`parity loop · summary filed: ${lapsBurned} lap(s) · spend/lanes: ${JSON.stringify(Object.fromEntries(laneSpend))} · ${meteredTokens}/${budgetTokens} tok`);
+    };
+    let lastClosed = 0;
+    let lastOpen = 0;
+    // stretch items: proposed once, never built, never blocking parity
+    const stretchItems = extractFull().stretch;
+    if (stretchItems.length) {
+      console.log(`\nparity loop · ${stretchItems.length} stretch item(s) PROPOSED (not in the contract; never built without your say-so):`);
+      for (const st of stretchItems.slice(0, 5)) console.log(`  ~ ${st.slice(0, 100)}`);
+      for (const st of stretchItems) {
+        appendFileSync(ledgerPath, JSON.stringify({
+          ts: new Date().toISOString(), run: 'stretch', target: st.slice(0, 200), ref,
+          verdict: 'stretch-proposed', evidence_count: 0, citation: '',
+          reason: 'beyond parity - proposed only, requires your approval to build',
+        }) + '\n');
+      }
+    }
+    const laneSpend = new Map();
     let noMoveStreak = 0;
     let prevClosed = -1;
+    let lapsBurned = 0;
     for (let iter = 1; iter <= maxIter; iter++) {
       if (!underBudget()) {
         console.log(`parity loop · BUDGET EXHAUSTED (${meteredTokens} >= ${budgetTokens} tok) after ${iter - 1} lap(s) - stopping honestly`);
+        fileSummary();
         return 7;
       }
       const v = await verifyContract(extract(), cwd, { testCmd, refPath: ref });
+      lapsBurned = iter;
       fileLap(iter, v.results, ref);
       console.log(`\nparity loop · iteration ${iter}/${maxIter}: ${v.closed}/${v.total} closed (ledger rows filed: ${v.results.length})`);
       const open = v.results.filter((r) => !r.closed);
+      lastClosed = v.closed; lastOpen = v.open;
       for (const r of open.slice(0, 5)) console.log(`  open [${r.kind}] ${r.behavior.slice(0, 90)}\n      ${r.reason}`);
       if (open.length === 0) {
         console.log('parity loop · ALL BEHAVIORS CLOSED - contract matches the build');
+        fileSummary();
         return 0;
       }
       if (v.closed === prevClosed) {
@@ -183,7 +231,10 @@ export async function cmdParity(args, flags) {
       const brief = `Close these parity behaviors in ${cwd}:\n${open.slice(0, 10).map((r, i) => `${i + 1}. ${r.behavior.slice(0, 140)}`).join('\n')}`;
       console.log(`parity loop · builder ${builder.name} on ${Math.min(open.length, 10)} open behavior(s)`);
       const res = await invokeLane(builder, brief, { timeoutMs: 1000 * 60 * 30, cwd });
-      meteredTokens += (res.usage?.total_tokens || 0);
+      lapsBurned = iter;
+      const laneTok = res.usage?.total_tokens || 0;
+      meteredTokens += laneTok;
+      laneSpend.set(builder.name, (laneSpend.get(builder.name) || 0) + laneTok);
       console.log(`parity loop · builder ${res.ok ? 'done' : 'FAILED'}${res.ok ? '' : ': ' + String(res.error || '').slice(0, 120)}`);
       if (meteredTokens >= budgetTokens) {
         console.log(`parity loop · budget now exhausted (${meteredTokens}/${budgetTokens} tok) - next lap will stop`);
@@ -194,6 +245,7 @@ export async function cmdParity(args, flags) {
       }
     }
     console.log(`parity loop · ITERATION CAP (${maxIter}) - stopping with contract still open (raise --max-iter)`);
+    fileSummary();
     return 5;
   }
   // B6: cadre parity --ledger renders the parity ledger (no build)

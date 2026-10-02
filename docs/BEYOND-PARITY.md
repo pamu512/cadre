@@ -1,6 +1,6 @@
 # Beyond Parity — generated from the ledger
 
-Generated: 2026-10-02T14:05:14.536Z by `cadre metrics --report` — do not edit by hand; regenerate instead.
+Generated: 2026-10-02T22:27:04.976Z by `cadre metrics --report` — do not edit by hand; regenerate instead.
 
 ## Run ledger
 
