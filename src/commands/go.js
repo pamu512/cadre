@@ -152,6 +152,14 @@ export async function cmdGo(args, flags, { cwd = process.cwd() } = {}) {
   const budgetTokens = Number(flags.budget || pins.budget || 200000);
   let meteredTokens = 0;
   const underBudget = () => meteredTokens < budgetTokens;
+  // EVERY exit path stamps the usage rollup - early-aborted runs cost real
+  // tokens too and the audit trail must say how many.
+  const stampUsage = (runId) => {
+    try {
+      const r = readRun(runId);
+      if (r && !r.usage?.budget_tokens) updateRun(runId, { usage: { metered_tokens: meteredTokens, budget_tokens: budgetTokens } });
+    } catch { /* ledger write best-effort */ }
+  };
 
   const byRole = Object.fromEntries(routing.assignments.map((a) => [a.role, roster.lanes.find((l) => l.name === a.lane)]));
 
@@ -187,6 +195,7 @@ export async function cmdGo(args, flags, { cwd = process.cwd() } = {}) {
             appendLog(record.id, `METER: ${m.lane} exhausted; reset in ${hrs.toFixed(1)}h - pausing, will resume after refill`);
             console.log(`meter · ${m.lane} empty - reset in ${hrs.toFixed(1)}h. Filing as paused-with-resume-plan (re-run after refill, or --no-wait to downshift now).`);
             updateRun(record.id, { status: 'resumed-brief', verdict: { passed: false, summary: `paused: ${m.lane} quota empty, resets ${m.reset_at}` } });
+            stampUsage(record.id);
             return 3;
           }
           appendLog(record.id, `METER: ${m.lane} exhausted - falling down the chain`);
@@ -203,6 +212,7 @@ export async function cmdGo(args, flags, { cwd = process.cwd() } = {}) {
           } else {
             console.log(`chain · all stops exhausted - pausing with resume plan`);
             updateRun(record.id, { status: 'resumed-brief', verdict: { passed: false, summary: 'all chain stops exhausted' } });
+            stampUsage(record.id);
             return 3;
           }
         } else if (p.state === 'pacing') {
@@ -343,7 +353,9 @@ meteredTokens += (res.usage?.total_tokens || 0);
           appendLog(record.id, `RACE outcomes (no winner):\n  ${outcomes.join('\n  ')}`);
           console.log(`race · no candidate proven:\n${outcomes.map((o) => `  ${o}`).join('\n')}`);
           await updateRun(record.id, { status: 'failed', ended: new Date().toISOString(), verdict: { passed: false, missing: [], summary: 'race: no candidate proven' } });
-          audit({ kind: 'run-end', run: record.id, status: 'failed' });
+stampUsage(record.id);
+    stampUsage(record.id);
+      audit({ kind: 'run-end', run: record.id, status: 'failed' });
           releaseLock(record.id, 'race-no-winner');
           return 1;
         }
@@ -529,6 +541,7 @@ meteredTokens += (res.usage?.total_tokens || 0);
         verdict: { passed: false, missing: [], summary: `scope creep: ${creep.join(', ')}` },
         ended: new Date().toISOString(),
       });
+stampUsage(record.id);
       audit({ kind: 'run-end', run: record.id, status: 'rejected', creep });
       releaseLock(record.id, 'rejected-scope-creep');
       console.log(`\n✗ run ${record.id} REJECTED - work outside the scope lock`);

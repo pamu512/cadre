@@ -89,10 +89,18 @@ export function addEvidence(id, item) {
 
 // Audit trail: one JSONL line per notable event, forever appendable.
 // Sanitize anything key-shaped before it hits disk.
+// numeric accounting fields are never secrets: metered_tokens, budget_tokens,
+// total_tokens are COUNTS. Redact only key-shaped STRING values and
+// credential-ish fields that are not usage counters.
+const USAGE_COUNTERS = /^(metered_tokens|budget_tokens|total_tokens|prompt_tokens|completion_tokens|cached_tokens)$/i;
 export function audit(event) {
   mkdirSync(home(), { recursive: true });
-  const clean = JSON.parse(JSON.stringify(event, (k, v) =>
-    /key|token|secret|authorization/i.test(k) ? '[redacted]' : v));
+  const clean = JSON.parse(JSON.stringify(event, (k, v) => {
+    if (USAGE_COUNTERS.test(k)) return v;                       // counts, not secrets
+    if (/key|secret|authorization|api[-_]?key/i.test(k)) return '[redacted]';
+    if (/token/i.test(k) && typeof v === 'string' && v.length >= 12) return '[redacted]'; // key-shaped strings only
+    return v;
+  }));
   clean.ts = new Date().toISOString();
   appendFileSync(auditPath(), JSON.stringify(clean) + '\n');
 }

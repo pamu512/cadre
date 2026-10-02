@@ -343,3 +343,34 @@ test('go --race N: builders race in worktrees, winner diff applied, gate PROVEN'
   const { stdout: wls } = await exec('git', ['-C', proj, 'worktree', 'list']);
   assert.equal(wls.trim().split('\n').length, 1, 'no leftover worktrees');
 });
+
+test('audit: usage counters pass redaction; key-shaped strings stay redacted', async () => {
+  const h = home('redact');
+  const { audit } = await import(join(ROOT, 'src/store.js'));
+  const prev = process.env.CADRE_HOME;
+  process.env.CADRE_HOME = h.dir;
+  try {
+    audit({ kind: 'probe', metered_tokens: 99, budget_tokens: 1000, api_key: 'sk-abcdefghijklmnop1234', access_token: 'ghp_abcdefghijklmnopqrstuvwxyz' });
+    const lines = readFileSync(join(h.dir, 'audit.log'), 'utf-8').trim().split('\n');
+    const ev = JSON.parse(lines[lines.length - 1]);
+    assert.equal(ev.metered_tokens, 99, 'counters must survive');
+    assert.equal(ev.budget_tokens, 1000, 'budget must survive');
+    assert.equal(ev.api_key, '[redacted]', 'api_key must redact');
+    assert.equal(ev.access_token, '[redacted]', 'key-shaped token strings must redact');
+  } finally { process.env.CADRE_HOME = prev; }
+});
+
+test('go: early-aborted runs still carry the usage rollup', { timeout: 120000 }, async () => {
+  const h = home('earlyabort');
+  mkdirSync(join(h.dir, 'lanes'), { recursive: true });
+  writeFileSync(join(h.dir, 'lanes', 'broken.json'), JSON.stringify({
+    name: 'broken', good_at: ['general'], cost: 'free', talks: 'terminal', proves: 'commands',
+    invoke: { kind: 'command', command: 'false' },
+  }));
+  const proj = mkdtempSync(join(tmpdir(), 'earlyabort-'));
+  writeFileSync(join(proj, 'package.json'), JSON.stringify({ name: 'p', scripts: { test: 'true' } }));
+  const r = await cli(h, 'go', 'create x.txt with y', '--cwd', proj);
+  const runs = readdirSync(join(h.dir, 'runs')).sort();
+  const rec = JSON.parse(readFileSync(join(h.dir, 'runs', runs[runs.length - 1], 'run.json'), 'utf-8'));
+  assert.ok(rec.usage?.budget_tokens, 'usage rollup must exist even on aborted runs');
+});
