@@ -1,6 +1,6 @@
 {
   "name": "cadre",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Cadre — a model/bot-agnostic agent harness. Any model, any bot, one command. (experiment; wraps ax)",
   "private": true,
   "type": "module",
@@ -11,7 +11,7 @@
     "node": ">=18"
   },
   "scripts": {
-    "test": "node --test test/"
+    "test": "node --test"
   },
   "license": "MIT"
 }

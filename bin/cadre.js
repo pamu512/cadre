@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Cadre — any model, any bot, one command.
+// Cadre - any model, any bot, one command.
 import { cmdHelp } from '../src/commands/help.js';
 import { cmdGo } from '../src/commands/go.js';
 import { cmdLanes } from '../src/commands/lanes.js';
@@ -14,6 +14,11 @@ import { cmdDebate } from '../src/commands/debate.js';
 import { cmdPin } from '../src/commands/pin.js';
 import { cmdMcp } from '../src/commands/mcp.js';
 
+// flags that take a value as the next token (--flag value); all others are boolean
+const VALUE_FLAGS = new Set([
+  'impl', 'budget', 'context', 'timeout', 'why', 'retire', 'resume', 'clear', 'role', 'ref',
+]);
+
 function parseArgv(argv) {
   const _ = [];
   const flags = {};
@@ -21,8 +26,16 @@ function parseArgv(argv) {
     const a = argv[i];
     if (a.startsWith('--')) {
       const eq = a.indexOf('=');
-      if (eq > -1) flags[a.slice(2, eq)] = a.slice(eq + 1);
-      else flags[a.slice(2)] = true;
+      if (eq > -1) {
+        flags[a.slice(2, eq)] = a.slice(eq + 1);
+      } else {
+        const name = a.slice(2);
+        if (VALUE_FLAGS.has(name) && i + 1 < argv.length && !argv[i + 1].startsWith('--')) {
+          flags[name] = argv[++i];
+        } else {
+          flags[name] = true;
+        }
+      }
     } else {
       _.push(a);
     }

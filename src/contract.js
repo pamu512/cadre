@@ -1,5 +1,5 @@
 // Minimal draft-2020-12 subset validator for the lane contract.
-// Zero dependencies on purpose — the harness should be a single binary you can read.
+// Zero dependencies on purpose - the harness should be a single binary you can read.
 import { readFileSync } from 'node:fs';
 
 export function validateLane(lane) {
@@ -62,7 +62,7 @@ export function validateLane(lane) {
     fail('invoke', 'must be an object');
   }
 
-  // additionalProperties: false — reject unknown keys
+  // additionalProperties: false - reject unknown keys
   const KNOWN = new Set(['name', 'identity', 'good_at', 'cost', 'talks', 'proves', 'craft', 'invoke']);
   for (const key of Object.keys(lane)) {
     if (!KNOWN.has(key)) fail(key, 'unknown property (contract is closed)');
