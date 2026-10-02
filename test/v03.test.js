@@ -620,3 +620,40 @@ test('meters: entitlement shapes + provider grouping + router consumption', asyn
   assert.ok(demoted.fit <= neutral.fit - 6, 'empty entitlement demotes by 6');
   assert.ok(demoted.why.includes('entitlement empty (monthly)'));
 });
+
+test('pace to the window: no-close refuses BEFORE spend; pace mode throttles via bucket', { timeout: 120000 }, async () => {
+  const { pacePlan, windowBucket } = await import(join(ROOT, 'src/meters.js'));
+  // full-speed
+  assert.equal(pacePlan({ quota: 100000, used: 10000, neededTokens: 50000, resetAt: new Date(Date.now() + 3600e3).toISOString() }).mode, 'full-speed');
+  // pace: need > left but a fresh window covers it
+  const p = pacePlan({ quota: 300000, used: 290000, neededTokens: 250000, resetAt: new Date(Date.now() + 5 * 3600e3).toISOString(), windowHours: 5 });
+  assert.equal(p.mode, 'pace');
+  assert.ok(p.allowancePerHour === 60000, 'refill computed from window');
+  // no-close: even a fresh window can't cover the need
+  const nc = pacePlan({ quota: 10000, neededTokens: 50000, resetAt: new Date(Date.now() + 3600e3).toISOString() });
+  assert.equal(nc.mode, 'no-close');
+  assert.ok(!nc.closes);
+  assert.ok(nc.note.includes("the math doesn't close"), 'says so in those words');
+  // bucket: empty now, waits for refill
+  const b = windowBucket({ quota: 600, windowHours: 1, used: 600 });
+  assert.equal(b.waitMsFor(300), 1800000, 'half the window for half the quota');
+
+  // e2e: a no-close meter refuses the whole run before any spend
+  const h = home('pace');
+  mkdirSync(join(h.dir, 'lanes'), { recursive: true });
+  writeFileSync(join(h.dir, 'lanes', 'file-writer.json'), JSON.stringify({
+    name: 'file-writer', good_at: ['create', 'write'], cost: 'free', talks: 'terminal', proves: 'commands',
+    invoke: { kind: 'command', command: `/bin/sh ${join(ROOT, 'scripts/fixture-writer.sh')} {brief}` },
+  }));
+  const r1 = await cli(h, 'meter', '--set', 'lane=file-writer', '--provider', 'demo', '--quota', '100', '--reset', '2026-10-04T00:00:00Z');
+  const proj = mkdtempSync(join(tmpdir(), 'pace-'));
+  writeFileSync(join(proj, 'package.json'), JSON.stringify({ name: 'p', scripts: { test: 'true' } }));
+  const r2 = await cli(h, 'go', 'create paceproof.txt with content', '--cwd', proj, '--budget', '500000');
+  assert.ok(r2.stdout.includes("the math doesn't close"), 'refusal message shown');
+  assert.ok(r2.stdout.includes('refusing to start'), 'refuses before start');
+  const runs = readdirSync(join(h.dir, 'runs')).sort();
+  const rec = JSON.parse(readFileSync(join(h.dir, 'runs', runs[runs.length - 1], 'run.json'), 'utf-8'));
+  assert.equal(rec.status, 'resumed-brief');
+  assert.ok(rec.verdict.summary.includes("doesn't close"));
+  assert.ok(!existsSync(join(proj, 'paceproof.txt')), 'nothing spent');
+});

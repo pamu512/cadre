@@ -219,3 +219,76 @@ export function entitlementView(laneNames, { usage } = {}) {
   }
   return { byLane, byProvider };
 }
+// ---- pace to the window --------------------------------------------------------
+// The math a long unattended run does BEFORE and DURING spending:
+//   closes      : needed fits in what's left - run full speed
+//   pace        : needed exceeds what's left, but a fresh window could cover it
+//                 -> throttle: spend no faster than the window refills
+//   no-close    : even a fresh window cannot cover the need - say so BEFORE start
+export function pacePlan({ quota, resetAt, used = 0, rollover = 0, windowHours = null, neededTokens }) {
+  if (quota == null || !Number.isFinite(Number(neededTokens))) {
+    return { closes: true, mode: 'unknown', note: 'quota or need unknown - no math to do' };
+  }
+  const now = Date.now();
+  let reset = resetAt ? new Date(resetAt).getTime() : NaN;
+  if (Number.isFinite(reset) && windowHours && reset <= now) {
+    while (reset <= now) reset += windowHours * 3.6e6;
+  }
+  const available = quota + (rollover || 0) - (used || 0);
+  const need = Number(neededTokens);
+  if (need <= available) {
+    return { closes: true, mode: 'full-speed', note: `need ${need.toLocaleString()} <= ${available.toLocaleString()} left - full speed` };
+  }
+  // need > available: can a fresh window cover it?
+  const freshWindow = quota + (rollover || 0);
+  if (need > freshWindow) {
+    return {
+      closes: false, mode: 'no-close',
+      note: `the math doesn't close: need ~${need.toLocaleString()} tok, window holds ${freshWindow.toLocaleString()} - no throttle can fix this; declare a bigger quota or split the run`,
+    };
+  }
+  const hoursLeft = Number.isFinite(reset) ? Math.max(0.1, (reset - now) / 3.6e6) : (windowHours || 1);
+  const refillPerHour = freshWindow / (windowHours || 24);
+  return {
+    closes: true, mode: 'pace',
+    allowancePerHour: refillPerHour,
+    note: `need ~${need.toLocaleString()} > ${available.toLocaleString()} left - pacing to the window (${refillPerHour.toLocaleString(undefined, { maximumFractionDigits: 0 })} tok/h refill, ${hoursLeft.toFixed(1)}h to reset)`,
+  };
+}
+
+// token bucket for in-run throttling: spend no faster than the window refills
+export function makeWindowBucket({ quota, rollover = 0, used = 0, windowHours = 24, now = Date.now() } = {}) {
+  const refillPerMs = (quota + rollover) / (windowHours * 3.6e6);
+  let tokens = Math.max(0, quota + rollover - used);
+  let last = now;
+  return {
+    refillPerMs,
+    available: () => {
+      const t = Date.now();
+      tokens = Math.min(quota + rollover, tokens + (t - last) * refillPerMs);
+      last = t;
+      return tokens;
+    },
+    spend: (n) => { tokens = Math.max(0, tokens - n); },
+    // ms to wait until `n` tokens are available (0 if now); Infinity if n > capacity
+    waitMsFor: (n) => {
+      const avail = this?.available ? this.available() : 0;
+      return n > quota + rollover ? Infinity : Math.max(0, Math.ceil((n - avail) / refillPerMs));
+    },
+  };
+}
+
+// waitMsFor needs the closure's available(), not this-binding - proper factory:
+export function windowBucket(opts) {
+  const b = makeWindowBucket(opts);
+  return {
+    refillPerMs: b.refillPerMs,
+    available: b.available,
+    spend: b.spend,
+    waitMsFor: (n) => {
+      const avail = b.available();
+      const cap = (opts.quota || 0) + (opts.rollover || 0);
+      return n > cap ? Infinity : Math.max(0, Math.ceil((n - avail) / b.refillPerMs));
+    },
+  };
+}

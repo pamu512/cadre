@@ -248,6 +248,7 @@ export async function cmdGo(args, flags, { cwd = process.cwd() } = {}) {
     }
   } catch (e) { console.log(`meter preflight skipped (${e.message.split('\n')[0]})`); }
 
+
   // ---- 0. reuse ------------------------------------------------------------
   console.log('\n── reuse ────────────────────────────');
   try {
@@ -300,6 +301,7 @@ meteredTokens += (res.usage?.total_tokens || 0);
     appendLog(record.id, `PLAN (local scaffold):\n${planText}`);
   }
 
+
   // ---- 2. build (optionally raced across builders in isolated worktrees) ----
   console.log('\n── build ────────────────────────────');
   let changedFilesList = [];
@@ -309,6 +311,45 @@ meteredTokens += (res.usage?.total_tokens || 0);
   globalThis.CADRE_FS_SNAPSHOT = before ? null : fsSnapshot(cwd);
   let builder = byRole.builder;
   let buildOutput = '';
+  // ---- pace-to-the-window preflight: the math says so BEFORE the run starts --
+  // need = budget cap (the honest upper bound of this run's spend). If even a
+  // fresh window can't cover it, refuse now - no hour-one blowthrough.
+  globalThis.CADRE_WINDOW_BUCKETS = null;
+  try {
+    const { loadMeters, usageFromAudit, pacePlan, windowBucket } = await import('../meters.js');
+    const meters2 = loadMeters();
+    const usage2 = usageFromAudit();
+    if (meters2.length) {
+      // the lane we plan to build with carries the pacing constraint
+      const bl = builder?.name;
+      const bm = bl ? meters2.find((x) => x.lane === bl) : null;
+      if (bm && bm.quota_tokens != null) {
+        const plan = pacePlan({
+          quota: bm.quota_tokens, resetAt: bm.reset_at,
+          used: usage2.get(bm.lane)?.tokens || 0,
+          rollover: bm.rollover_tokens || 0, windowHours: bm.window_hours || null,
+          neededTokens: budgetTokens,
+        });
+        appendLog(record.id, `PACE PLAN (${bm.lane}): ${plan.mode} - ${plan.note}`);
+        if (!plan.closes) {
+          console.log(`pace · ${bm.lane} ${plan.note}`);
+          console.log('pace · refusing to start: the math does not close BEFORE we spend a cent');
+          updateRun(record.id, { status: 'resumed-brief', verdict: { passed: false, summary: `pace: ${plan.note}` } });
+          audit({ kind: 'pace-refusal', run: record.id, lane: bm.lane, note: plan.note });
+          releaseLock(record.id, 'pace-no-close');
+          return 8;
+        }
+        if (plan.mode === 'pace') {
+          console.log(`pace · ${bm.lane} ${plan.note}`);
+          globalThis.CADRE_WINDOW_BUCKETS = new Map([[bm.lane, windowBucket({
+            quota: bm.quota_tokens, rollover: bm.rollover_tokens || 0,
+            used: usage2.get(bm.lane)?.tokens || 0, windowHours: bm.window_hours || 24,
+          })]]);
+        }
+      }
+    }
+  } catch { /* pace preflight best-effort */ }
+
 
   // speculative race (--race N): N file-acting builders work the same brief
   // concurrently in isolated git worktrees; judged in fit order (changes +

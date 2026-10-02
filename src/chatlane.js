@@ -53,6 +53,19 @@ export async function chatLane(lane, messages, opts = {}) {
   });
   const maxRetries = opts.maxRetries ?? 3;
   let lastErr = null;
+  // pace to the window: if a pacing bucket exists for this lane, wait until the
+  // window has room rather than spending at hour-one speed
+  const bucket = globalThis.CADRE_WINDOW_BUCKETS?.get(lane.name);
+  const est = opts.estTokens ?? opts.max_tokens ?? 2048;
+  if (bucket) {
+    const wait = bucket.waitMsFor(est);
+    if (wait === Infinity) {
+      const err = new Error(`${lane.name}: single call (~${est} tok) exceeds the whole window - cannot pace`);
+      err.code = 'CADRE_RATE_LIMITED';
+      throw err;
+    }
+    if (wait > 0) await new Promise((r) => setTimeout(r, Math.min(wait, 60000)));
+  }
   // rate-limit meter: if this lane has a declared rpm/rps ceiling, wait for
   // window room instead of slamming the provider into a 429
   try {
@@ -85,6 +98,7 @@ export async function chatLane(lane, messages, opts = {}) {
       });
       const text = payload.choices?.[0]?.message?.content;
       if (typeof text !== 'string') throw new Error(`${lane.name}: unexpected response shape (no choices[0].message.content)`);
+      if (bucket) bucket.spend(payload.usage?.total_tokens || est);
       return { text, usage: payload.usage || null, model: payload.model || model, lane: lane.name };
     } catch (e) {
       lastErr = e;
