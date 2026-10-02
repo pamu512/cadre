@@ -278,3 +278,16 @@ test('invoke: MCP agent mode chains tools, read-only by default, condenses JSON 
   const use = r.steps.find((s) => s.tool === 'use_thing');
   assert.ok(String(use.reply).includes('use thing now please'), 'JSON condensed to its string leaf');
 });
+
+test('rules critic: all four roles fire unconditionally - rules tier fires when no chat lane', async () => {
+  const { criticRules, renderCriticRules } = await import(join(ROOT, 'src/rulescritic.js'));
+  // mutating brief + files changed = no false coverage finding (timing artifact)
+  const r1 = criticRules({ brief: 'create rules-critic.txt with proof', changed: [{ file: 'rules-critic.txt' }], diffsText: 'diff --git a/rules-critic.txt b/rules-critic.txt\n+proof', manifest: null, evidenceKinds: [] });
+  assert.ok(!r1.findings.some((f) => f.rule === 'coverage' && f.severity === 'high'), 'no timing false positive');
+  // mutating brief + nothing changed + no evidence = the real miss fires
+  const r2 = criticRules({ brief: 'create rules-critic.txt with proof', changed: [], diffsText: '', manifest: null, evidenceKinds: [] });
+  assert.ok(r2.findings.some((f) => f.rule === 'coverage' && f.severity === 'high'), 'real miss detected');
+  // smell detection still works
+  assert.ok(renderCriticRules(r1).includes('CLEAN'));
+  assert.ok(!renderCriticRules(r2).includes('CLEAN'));
+});

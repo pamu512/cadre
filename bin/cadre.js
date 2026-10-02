@@ -2,6 +2,7 @@
 // Cadre - any model, any bot, one command.
 import { cmdHelp } from '../src/commands/help.js';
 import { cmdGo } from '../src/commands/go.js';
+import { resolve } from 'node:path';
 import { cmdLanes } from '../src/commands/lanes.js';
 import { cmdParity } from '../src/commands/parity.js';
 import { cmdPlan } from '../src/commands/plan.js';
@@ -21,7 +22,7 @@ import { cmdMcp } from '../src/commands/mcp.js';
 // flags that take a value as the next token (--flag value); all others are boolean
 const VALUE_FLAGS = new Set([
   'impl', 'budget', 'context', 'timeout', 'why', 'retire', 'resume', 'clear', 'role', 'ref',
-  'quiet', 'set', 'provider', 'quota', 'reset', 'rollover', 'rail', 'lane', 'scope', 'lines', 'root', 'mcp-agent',
+  'quiet', 'set', 'provider', 'quota', 'reset', 'rollover', 'rail', 'lane', 'scope', 'lines', 'root', 'mcp-agent', 'cwd',
 ]);
 
 function parseArgv(argv) {
@@ -77,7 +78,7 @@ async function main() {
   const { _, flags } = parseArgv(rest);
 
   switch (command) {
-    case 'go': return cmdGo(_, flags);
+    case 'go': return cmdGo(_, flags, { cwd: typeof flags.cwd === 'string' ? resolve(flags.cwd) : undefined });
     case 'lanes': return cmdLanes(flags);
     case 'help':
     case '--help':

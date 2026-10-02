@@ -168,11 +168,17 @@ test('gate: bogus citation ref fails the citations family; real ref passes', asy
 test('router: demonstrated failure outranks free cost', async () => {
   const { historyPenalty, scoreLane } = await import(join(ROOT, 'src/router.js'));
   // fabricated ledger via penalty unit: a lane with 0 passes over 3 runs
+  // hermetic: injected ledger, independent of this machine's live run history
   const failing = { name: 'ollama-local', good_at: ['scaffold', 'draft', 'summarize'], cost: 'free', invoke: {} };
-  const p = historyPenalty(failing);
+  const ledger = new Map([['ollama-local', { runs: 3, passed: 0 }]]);
+  const p = historyPenalty(failing, ledger);
   assert.ok(p >= 4, `failing lane must be penalized, got ${p}`);
+  const strugglingLedger = new Map([['ollama-local', { runs: 4, passed: 1 }]]);
+  assert.equal(historyPenalty(failing, strugglingLedger), 4, 'sub-50% pass rate = struggling penalty');
+  const healthyLedger = new Map([['ollama-local', { runs: 5, passed: 3 }]]);
+  assert.equal(historyPenalty(failing, healthyLedger), 0, '>=50% pass rate = no penalty');
   const working = { name: 'nonexistent-lane-xyz', good_at: ['edits'], cost: 'plan', invoke: {} };
-  assert.equal(historyPenalty(working), 0, 'no history = no penalty');
+  assert.equal(historyPenalty(working, new Map()), 0, 'no history = no penalty');
 });
 
 // ---- cost-is-tiebreak-only ----------------------------------------------------

@@ -65,8 +65,8 @@ function laneHistory() {
   return stats;
 }
 
-export function historyPenalty(lane) {
-  const h = laneHistory().get(lane.name);
+export function historyPenalty(lane, injectedHistory = null) {
+  const h = (injectedHistory || laneHistory()).get(lane.name);
   if (!h || h.runs < 2) return 0; // not enough evidence
   const passRate = h.passed / h.runs;
   if (passRate >= 0.5) return 0;

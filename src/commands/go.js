@@ -2,7 +2,7 @@
 // gates on evidence, files the receipts. Every step is real on this machine:
 // ax lanes delegate to the ax binary; keyed chat lanes (any OpenAI-compatible
 // re-checks artifacts on disk before stamping anything.
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -14,7 +14,7 @@ import { gateVerdict, renderGateReport, verifyCommands } from '../gate.js';
 import { invokeLane } from '../invoke.js';
 import { buildScopeManifest, scopeCreep, renderManifest } from '../scope.js';
 import {
-  createRun, updateRun, appendLog, addEvidence, audit, listRuns, loadPins, home,
+  createRun, updateRun, appendLog, addEvidence, audit, listRuns, loadPins, home, readRun,
   acquireLock, releaseLock,
 } from '../store.js';
 
@@ -129,6 +129,7 @@ export async function cmdGo(args, flags, { cwd = process.cwd() } = {}) {
   const routing = assignRoles(roster, { brief });
   // scope lock (PRD 6.6): manifest before work breathes
   const manifest = buildScopeManifest({ brief, scope: flags.scope, cwd });
+  const scopeManifest = manifest; // alias for the rules critic below
   const record = createRun({
     brief, kind: 'go',
     roles: Object.fromEntries(routing.assignments.map((a) => [a.role, a.lane])),
@@ -265,6 +266,9 @@ meteredTokens += (res.usage?.total_tokens || 0);
 
   // ---- 2. build ------------------------------------------------------------
   console.log('\n── build ────────────────────────────');
+  let changedFilesList = [];
+  let diffsTextForCritic = '';
+  let evidenceKindsForCritic = [];
   const before = await gitState(cwd);
   globalThis.CADRE_FS_SNAPSHOT = before ? null : fsSnapshot(cwd);
   const builder = byRole.builder;
@@ -303,6 +307,8 @@ meteredTokens += (res.usage?.total_tokens || 0);
     return 1;
   }
 
+  // rules critic inputs: evidence kinds collected so far
+  evidenceKindsForCritic = (readRun(record.id)?.evidence || []).map((e) => e.kind);
   // ---- 3. critique ----------------------------------------------------------
   console.log('\n── critique ─────────────────────────');
   const critic = byRole.critic;
@@ -323,8 +329,23 @@ meteredTokens += (res.usage?.total_tokens || 0);
       appendLog(record.id, `CRITIQUE skipped: ${e.message.slice(0, 500)}`);
     }
   } else {
-    console.log('critic · no keyed reasoning lane - step recorded as skipped (not silently passed)');
-    appendLog(record.id, 'CRITIQUE skipped: no keyed reasoning lane');
+    // deterministic rules critic ALWAYS fires when no chat lane exists - the
+    // critic role is unconditional; the tier is honestly labeled
+    try {
+      const { criticRules, renderCriticRules } = await import('../rulescritic.js');
+      const changed = (changedFilesList || []).map((c) => c.file);
+      const rr = criticRules({ brief, changed, diffsText: diffsTextForCritic || '', manifest: scopeManifest, evidenceKinds: evidenceKindsForCritic || [] });
+      console.log(`critic · rules tier (no chat lane on this machine):`);
+      console.log(renderCriticRules(rr).replace(/^/gm, '  ') || '  (no findings)');
+      appendLog(record.id, `CRITIQUE (rules tier):\n${renderCriticRules(rr)}`);
+      await addEvidence(record.id, { kind: 'citation', label: 'critic (rules tier) review', ref: `runs/${record.id}/run.log#critique` });
+      if (rr.findings.some((f) => f.severity === 'high')) {
+        appendLog(record.id, 'CRITIQUE rules tier: HIGH findings present - see above');
+      }
+    } catch (e) {
+      console.log(`critic · rules tier failed (${e.message.split('\n')[0]}) - recorded`);
+      appendLog(record.id, `CRITIQUE rules tier failed: ${e.message.slice(0, 300)}`);
+    }
   }
 
   // ---- 4. verify ------------------------------------------------------------
@@ -353,13 +374,19 @@ meteredTokens += (res.usage?.total_tokens || 0);
   if (!before && !after && globalThis.CADRE_FS_SNAPSHOT) {
     const afterSnap = fsSnapshot(cwd);
     const changed = fsDiff(globalThis.CADRE_FS_SNAPSHOT, afterSnap);
+    changedFilesList = changed;
     for (const c of changed.slice(0, 50)) {
       await addEvidence(record.id, { kind: 'diff', label: `${c.file} (${c.isNew ? 'new file' : 'modified'})`, path: c.file, plus: c.isNew ? 1 : 1, minus: 0 });
     }
     if (changed.length) console.log(`diffs · ${changed.length} file(s) changed (fs mode - not a git repo)`);
   }
   if (before && after) {
-    const changedNow = after.porcelain.trim().length > 0;
+    // BEFORE/AFTER DELTA: only files whose git state changed during this run
+    // count as the run's diffs - pre-existing dirt is not our work
+    const beforeSet = new Set(before.porcelain.split('\n').filter(Boolean));
+    const afterSet = new Set(after.porcelain.split('\n').filter(Boolean));
+    const deltaLines = [...afterSet].filter((l) => !beforeSet.has(l));
+    const changedNow = deltaLines.length > 0;
     if (changedNow) {
       for (const line of after.numstat.split('\n').filter(Boolean)) {
         const [plus, minus, file] = line.split('\t');
@@ -367,7 +394,7 @@ meteredTokens += (res.usage?.total_tokens || 0);
       }
       // untracked files = artifacts + diffs (a new file's diff is all-plus:
       // count its added lines so a first-commit repo can still prove "diffs")
-      for (const line of after.porcelain.split('\n').filter((l) => l.startsWith('??'))) {
+      for (const line of deltaLines.filter((l) => l.startsWith('??'))) {
         const p = line.slice(3).trim();
         const full = resolve(cwd, p);
         if (existsSync(full) && statSync(full).isFile()) {
@@ -393,6 +420,8 @@ meteredTokens += (res.usage?.total_tokens || 0);
   // scope-creep check (PRD 6.6): diff outside the lock is caught here, with citation
   if (after && after.porcelain.trim().length > 0) {
     const changed = after.numstat.split('\n').filter(Boolean).map((l) => l.split('\t')[2]);
+    changedFilesList = (changed || []).map((f) => ({ file: f }));
+    try { diffsTextForCritic = execFileSync('git', ['-C', cwd, 'diff', 'HEAD'], { encoding: 'utf-8', maxBuffer: 1024 * 1024 * 8 }); } catch { diffsTextForCritic = ''; }
     const creep = scopeCreep(changed, manifest);
     if (creep.length > 0) {
       appendLog(record.id, `SCOPE CREEP caught at gate: ${creep.join(', ')} (lock: ${manifest.lock.join(' ')}) — "not in the ask"`);
