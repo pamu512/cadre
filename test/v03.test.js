@@ -153,3 +153,46 @@ test('meter: per-lane split with aggregate; free lanes excluded; raw-log attribu
   assert.ok(isFreeLane('ollama-local') && isFreeLane('human') && isFreeLane('file-writer'));
   assert.ok(!isFreeLane('codex') && !isFreeLane('hermes'));
 });
+
+test('scan: MCP servers discovered from standard configs as lanes', async () => {
+  const h = home('mcpscan');
+  const proj = mkdtempSync(join(tmpdir(), 'mcpscan-'));
+  writeFileSync(join(proj, '.mcp.json'), JSON.stringify({
+    mcpServers: {
+      'test-server': { command: '/bin/echo', args: [] },
+      'remote-server': { url: 'https://mcp.example.com/sse' },
+      'broken-server': { command: '/no/such/binary' },
+    },
+  }));
+  const r = await cli({ ...h, env: { ...h.env } }, 'lanes', '--json');
+  // probe via module with cwd pinned to the temp project
+  process.env.CADRE_HOME = h.dir;
+  const prev = process.cwd();
+  process.chdir(proj);
+  try {
+    const { buildRoster } = await import(join(ROOT, 'src/scan.js'));
+    const roster = await buildRoster();
+    const mcp = roster.lanes.filter((l) => l.name.startsWith('mcp-'));
+    assert.ok(mcp.some((l) => l.name === 'mcp-test-server' && l.invoke.status === 'ready'), 'local server ready');
+    assert.ok(mcp.some((l) => l.name === 'mcp-remote-server' && l.talks === 'http'), 'remote server http');
+    assert.ok(mcp.some((l) => l.name === 'mcp-broken-server' && l.invoke.status === 'down'), 'missing binary marked down');
+    for (const l of mcp) {
+      assert.equal(l.cost, 'free');
+      assert.ok(l.proves === 'artifacts');
+    }
+  } finally {
+    process.chdir(prev);
+    delete process.env.CADRE_HOME;
+  }
+});
+
+test('scan: known agent apps probed on darwin (no false lanes)', async () => {
+  const src = readFileSync(join(ROOT, 'src/scan.js'), 'utf-8');
+  assert.ok(src.includes('probeAgentApps'), 'app probe exists');
+  assert.ok(src.includes('Claude.app') && src.includes('Cursor.app'), 'known apps table');
+  const { buildRoster } = await import(join(ROOT, 'src/scan.js'));
+  const roster = await buildRoster();
+  for (const l of roster.lanes.filter((x) => x.name.startsWith('app-'))) {
+    assert.ok(l.invoke.bundle, 'app lane names its bundle');
+  }
+});

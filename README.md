@@ -2,8 +2,9 @@
 
 Any model. Any bot. One command.
 
-Cadre is a model-agnostic agent harness that wraps the `ax` consensus harness on
-this machine. Every command does real work: state lives under `$CADRE_HOME`
+Cadre scans what is actually on your machine — CLIs, apps, local models, keys,
+MCP servers, who is online. Your setup is the roster: nothing to enroll,
+nothing to describe. It wraps the `ax` consensus harness where present. Every command does real work: state lives under `$CADRE_HOME`
 (default `~/.cadre`), builds delegate to `ax build`, evidence gates re-check disk
 before stamping anything, and anything not wired says so and exits 2.
 

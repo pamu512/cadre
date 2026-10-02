@@ -100,7 +100,92 @@ export async function scanMachine() {
   const detected = [...axLanes, ...apiLanes, ...local];
   const clisFound = clis.filter((c) => c.found);
 
-  return { lanes: [...detected, HUMAN_LANE], clis: clisFound, platform: platform() };
+  const mcpLanes = probeMcpServers();
+  const appLanes = probeAgentApps();
+  return { lanes: [...detected, ...mcpLanes, ...appLanes, HUMAN_LANE], clis: clisFound, platform: platform() };
+}
+
+// ---- MCP server discovery ----------------------------------------------------
+// Standard MCP config locations (cwd-first, then user-global). Each configured
+// server becomes a roster lane: free (it is your own machine's server), talks
+// stdio/http, proves artifacts. Command existence probed; missing = down.
+const MCP_CONFIG_PATHS = () => {
+  const h = homedir();
+  return [
+    join(process.cwd(), '.mcp.json'),
+    join(h, '.claude', 'mcp.json'),
+    join(h, '.cursor', 'mcp.json'),
+    join(h, '.config', 'mcp', 'mcp.json'),
+    join(h, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json'),
+  ];
+};
+
+function probeMcpServers() {
+  const found = [];
+  const seen = new Set();
+  for (const cfgPath of MCP_CONFIG_PATHS()) {
+    if (!existsSync(cfgPath)) continue;
+    let cfg;
+    try { cfg = JSON.parse(readFileSync(cfgPath, 'utf-8')); } catch { continue; }
+    const servers = cfg.mcpServers || {};
+    for (const [name, def] of Object.entries(servers)) {
+      if (seen.has(name)) continue;
+      if (!def || (!def.command && !def.url)) continue;
+      seen.add(name);
+      const isHttp = Boolean(def.url);
+      const binOk = isHttp || existsSync(def.command);
+      found.push({
+        name: `mcp-${name}`,
+        good_at: ['tools'],
+        cost: 'free',
+        talks: isHttp ? 'http' : 'stdin',
+        proves: 'artifacts',
+        invoke: {
+          kind: 'mcp',
+          command: def.command || null,
+          args: def.args || [],
+          url: def.url || null,
+          envNames: def.env ? Object.keys(def.env) : [],
+          source: cfgPath,
+          status: binOk ? 'ready' : 'down',
+        },
+      });
+    }
+  }
+  return found;
+}
+
+// ---- GUI app probe ------------------------------------------------------------
+// Known agent-capable macOS apps: existence-checked, projected as lanes. These
+// are apps a human drives (or that expose their own surfaces); cost plan if the
+// app implies a subscription, free otherwise. No behavioral claims beyond
+// presence - the lane says "this app is installed", nothing more.
+const KNOWN_AGENT_APPS = [
+  { bundle: 'Claude.app', name: 'app-claude', good_at: ['chat', 'prose'], cost: 'plan', talks: 'chat', proves: 'verdict' },
+  { bundle: 'ChatGPT.app', name: 'app-chatgpt', good_at: ['edits', 'tests', 'prose'], cost: 'plan', talks: 'chat', proves: 'test-output' },
+  { bundle: 'Cursor.app', name: 'app-cursor', good_at: ['ide-grade', 'non-ui'], cost: 'plan', talks: 'chat', proves: 'diffs' },
+  { bundle: 'Warp.app', name: 'app-warp', good_at: ['terminal', 'edits'], cost: 'plan', talks: 'chat', proves: 'diffs' },
+  { bundle: 'Raycast.app', name: 'app-raycast', good_at: ['launcher', 'tools'], cost: 'free', talks: 'chat', proves: 'artifacts' },
+];
+
+function probeAgentApps() {
+  if (platform() !== 'darwin') return [];
+  const out = [];
+  for (const app of KNOWN_AGENT_APPS) {
+    const p = join(homedir(), 'Applications', app.bundle);
+    const p2 = join('/Applications', app.bundle);
+    if (existsSync(p) || existsSync(p2)) {
+      out.push({
+        name: app.name,
+        good_at: app.good_at,
+        cost: app.cost,
+        talks: app.talks,
+        proves: app.proves,
+        invoke: { kind: 'app', bundle: app.bundle, status: 'ready' },
+      });
+    }
+  }
+  return out;
 }
 
 async function probeLocalServers() {
