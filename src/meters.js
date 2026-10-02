@@ -4,9 +4,10 @@
 //      plan names, window resets, quotas the user reads off their own dashboards)
 //   2. real usage from audit.log receipts (what cadre actually burned)
 // NO header telemetry, NO invented quotas: unknown values render as "—".
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { home, auditPath } from './store.js';
+import { home, auditPath, listRuns } from './store.js';
 
 export function loadMeters() {
   const p = join(home(), 'meters.json');
@@ -65,4 +66,34 @@ export function renderMeters({ meters, usage }) {
     );
   }
   return lines;
+}
+
+// ---- harness-wide aggregation -------------------------------------------------
+export function harnessUsage() {
+  const perLane = usageFromAudit();
+  const AX_RUNS = join(homedir(), '.config/ax/runs');
+  let axTokens = 0;
+  let axRuns = 0;
+  try {
+    for (const f of readdirSync(AX_RUNS)) {
+      if (!f.endsWith('.log')) continue;
+      let text;
+      try { text = readFileSync(join(AX_RUNS, f), 'utf-8'); } catch { continue; }
+      let found = false;
+      for (const m of text.matchAll(/(?:total_tokens|prompt_tokens|tokens used)[^0-9]{0,12}(\d[\d,]{3,})/g)) {
+        const n = Number(m[1].replace(/,/g, ''));
+        if (Number.isFinite(n) && n > 0) { axTokens += n; found = true; }
+      }
+      if (found) axRuns += 1;
+    }
+  } catch { /* no ax dir */ }
+  let cadreRuns = 0;
+  let cadreMetered = 0;
+  try {
+    for (const r of listRuns()) {
+      const t = r.usage?.metered_tokens;
+      if (typeof t === 'number' && t > 0) { cadreMetered += t; cadreRuns += 1; }
+    }
+  } catch { /* no ledger */ }
+  return { perLane, axTokens, axRuns, cadreMetered, cadreRuns };
 }

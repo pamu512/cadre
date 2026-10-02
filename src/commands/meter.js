@@ -56,13 +56,44 @@ export async function cmdMeter(args, flags) {
     return 0;
   }
 
-  console.log('cadre meter — entitlement ledger (official rails; "—" = unknown, never invented)');
-  const lines = renderMeters({ meters, usage });
-  console.log(lines.length ? lines.join('\n') : '  (no entitlements declared — see --set above)');
+  // harness-wide view: declared entitlements + ALL observed burn in one look
+  const { harnessUsage } = await import('../meters.js');
+  const hu = harnessUsage();
 
-  if (usage.size > 0) {
-    console.log('\nreal burn (from audit receipts):');
-    for (const [lane, v] of usage) console.log(`  ${lane.padEnd(16)} ${v.calls} call(s) · ${v.tokens} tok`);
+  console.log('cadre meter — what is left on the harness');
+  console.log('\ndeclared entitlements (official rails; "—" = unknown, never invented):');
+  const lines = renderMeters({ meters, usage: hu.perLane });
+  console.log(lines.length ? lines.join('\n') : '  (none declared - cadre meter --set lane=<name> --quota <tok> --reset <iso>)');
+
+  console.log('\nobserved burn (all sources, this machine):');
+  let totalObserved = 0;
+  for (const [lane, v] of hu.perLane) {
+    console.log(`  ${lane.padEnd(16)} ${v.calls} call(s) · ${v.tokens.toLocaleString()} tok  (chat receipts)`);
+    totalObserved += v.tokens;
+  }
+  if (hu.axTokens > 0) {
+    console.log(`  ${'ax pipelines'.padEnd(16)} ${hu.axRuns} run log(s) · ${hu.axTokens.toLocaleString()} tok  (ax run logs)`);
+    totalObserved += hu.axTokens;
+  }
+  if (hu.cadreMetered > 0) {
+    console.log(`  ${'run rollups'.padEnd(16)} ${hu.cadreRuns} run(s) · ${hu.cadreMetered.toLocaleString()} tok  (cadre run records)`);
+    totalObserved += hu.cadreMetered;
+  }
+  if (totalObserved === 0) console.log('  (nothing observed yet)');
+
+  const declared = meters.reduce((sum, m) => sum + (m.quota_tokens || 0), 0);
+  const declaredLeft = meters.reduce((sum, m) => {
+    const used = hu.perLane.get(m.lane)?.tokens || 0;
+    return sum + Math.max(0, (m.quota_tokens || 0) - used);
+  }, 0);
+  console.log('\nharness totals:');
+  console.log(`  observed burn (all lanes) : ${totalObserved.toLocaleString()} tok`);
+  if (declared > 0) {
+    console.log(`  declared quota            : ${declared.toLocaleString()} tok`);
+    console.log(`  declared remaining        : ${declaredLeft.toLocaleString()} tok (${Math.round(declaredLeft / declared * 100)}%)`);
+    console.log(`  undeclared lanes burn unseen - declare each with --set to make them count`);
+  } else {
+    console.log('  declared quota            : — (nothing declared; burn is tracked but "left" is unknowable)');
   }
   console.log('\npolicy: included-first ordering · pace-to-window · degrade-on-empty (downshift → park metered behind budget gate → pause with resume plan)');
   return 0;

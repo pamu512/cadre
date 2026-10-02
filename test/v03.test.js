@@ -140,3 +140,10 @@ test('meter: --set lane=<name> parses the lane= prefix (regression: literal key 
   assert.equal(p.state, 'empty');
   delete process.env.CADRE_HOME;
 });
+
+test('meter: harness-wide totals aggregate chat + ax + rollup sources', async () => {
+  const { harnessUsage } = await import(join(ROOT, 'src/meters.js'));
+  const hu = harnessUsage();
+  assert.ok(hu.axTokens >= 0 && hu.axRuns >= 0, 'ax aggregation must not throw');
+  assert.ok(hu.perLane instanceof Map, 'perLane is the receipt map');
+});
