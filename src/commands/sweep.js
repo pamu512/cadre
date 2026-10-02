@@ -3,10 +3,45 @@
 // --retire <id> marks a leftover retired (settled, verdict recorded as such);
 // --resume <id> just marks it back running so `go` continues fresh (cadre
 // runs are not resumable mid-pipeline; resume = re-brief).
-import { listRuns, updateRun, home } from '../store.js';
+import { listRuns, updateRun, home, tryReadRun, runDir, lockPath, hasLock, readRun } from '../store.js';
 import { audit } from '../store.js';
+import { writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 
+const run = promisify(execFile);
 const LEFTOVER = ['running', 'interrupted', 'gating'];
+
+function pidAlive(pid) {
+  if (!pid) return false;
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+// evidence snapshot (PRD 6.5): what the run had when it stalled — lock info,
+// git HEAD at the time (if recorded), log tail, evidence count. Filed into the
+// run dir so a triage decision is never made blind.
+function snapshot(id) {
+  const r = tryReadRun(id);
+  if (!r) return null;
+  const snap = {
+    id,
+    status: r.status,
+    started: r.started,
+    brief: r.brief,
+    roles: r.roles,
+    evidence_count: (r.evidence || []).length,
+    usage: r.usage,
+    lock_present: hasLock(id),
+    log_tail: (() => {
+      const p = join(runDir(id), 'run.log');
+      try { return readFileSync(p, 'utf-8').split('\n').slice(-8).join('\n'); } catch { return '(none)'; }
+    })(),
+    taken: new Date().toISOString(),
+  };
+  writeFileSync(join(runDir(id), 'sweep-snapshot.json'), JSON.stringify(snap, null, 2));
+  return snap;
+}
 
 export async function cmdSweep(args, flags) {
   if (flags.retire) {
@@ -39,8 +74,12 @@ export async function cmdSweep(args, flags) {
   console.log(`${show.length} run(s) needing attention:`);
   for (const r of show) {
     const dur = r.started ? `· started ${r.started.slice(0, 19).replace('T', ' ')}` : '';
-    console.log(`  ${r.id}  ${String(r.status).padEnd(12)} ${dur} · ${r.brief?.slice(0, 60)}`);
+    const lock = hasLock(r.id) ? ' · lock held' : '';
+    const dead = hasLock(r.id) && !pidAlive(tryReadRun(r.id)?.meta?.pid) ? ' (pid gone - crashed or killed)' : '';
+    console.log(`  ${r.id}  ${String(r.status).padEnd(12)} ${dur}${lock}${dead} · ${r.brief?.slice(0, 60)}`);
     if (LEFTOVER.includes(r.status)) {
+      const snap = snapshot(r.id);
+      if (snap) console.log(`      snapshot filed: ${join(runDir(r.id), 'sweep-snapshot.json')} (${snap.evidence_count} evidence items kept)`);
       console.log(`      -> cadre sweep --retire ${r.id}   or   cadre sweep --resume ${r.id}`);
     }
   }

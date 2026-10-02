@@ -5,7 +5,7 @@ import { tryReadRun, home, runsDir, runLogPath, runDir } from '../store.js';
 import { existsSync, readFileSync, statSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { gateVerdict, renderGateReport, EVIDENCE_FAMILIES } from '../gate.js';
+import { gateVerdict, renderGateReport, verifyCommands, EVIDENCE_FAMILIES } from '../gate.js';
 
 const AX_RUN_RE = /^run-\d{8}-\d{6}-\d+$/;
 const AX_RUNS = join(homedir(), '.config/ax/runs');
@@ -84,6 +84,29 @@ export async function cmdProof(args, flags) {
 
   const gate = gateVerdict(run, { cwd: process.cwd() });
   console.log(renderGateReport(gate).replace(/^/gm, '  '));
+
+  // --verify (PRD 6.3): cross-check the bundle against reality — artifacts on
+  // disk, commands actually re-run. This is the false-DONE audit.
+  if (flags.verify) {
+    console.log('  verify (re-checking against reality):');
+    let fails = 0;
+    for (const e of run.evidence || []) {
+      if (e.kind === 'artifact') {
+        const ok = existsSync(e.path);
+        if (!ok) { fails += 1; console.log(`    ✗ artifact missing: ${e.path}`); }
+      }
+    }
+    if (gate.passed) {
+      const reverified = await verifyCommands(run, { cwd: process.cwd(), max: 3 });
+      for (const rv of reverified) {
+        if (!rv.ok) { fails += 1; console.log(`    ✗ re-run failed (exit ${rv.reexit}): ${rv.command}`); }
+        else console.log(`    ✓ re-run clean: ${rv.command}`);
+      }
+    }
+    console.log(fails === 0 ? '    ✓ bundle verified against reality' : `    ✗ ${fails} verification failure(s)`);
+    return fails === 0 ? 0 : 1;
+  }
+
   if (run.usage && Object.keys(run.usage).length) {
     console.log(`  usage: ${JSON.stringify(run.usage)}`);
   }

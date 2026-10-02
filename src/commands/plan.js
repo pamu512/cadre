@@ -18,6 +18,26 @@ export async function cmdPlan(args, flags) {
   const roster = await buildRoster();
   const routing = assignRoles(roster, { brief: task });
 
+  // bench ranking (PRD 6.4): accuracy-per-dollar from real gated history —
+  // lanes that produced passing gated runs rank above untested lanes; among
+  // tested, fewer metered tokens per pass wins. History is the bench, no synthetic numbers.
+  const { listRuns } = await import('../store.js');
+  const history = listRuns().filter((r) => r.status === 'passed' && r.roles);
+  const stats = new Map();
+  for (const r of history) {
+    for (const lane of Object.values(r.roles || {})) {
+      const cur = stats.get(lane) || { passed: 0, tokens: 0 };
+      cur.passed += 1;
+      cur.tokens += r.usage?.metered_tokens || 0;
+      stats.set(lane, cur);
+    }
+  }
+  const rankScore = (s) => (s ? s.passed / Math.max(1, s.tokens / 10000) : -1);
+  const ranked = roster.lanes
+    .map((l) => ({ lane: l, s: stats.get(l.name) }))
+    .sort((a, b) => rankScore(b.s) - rankScore(a.s));
+
+
   console.log(`cadre plan - ${task}`);
   console.log(`roster · ${roster.lanes.length} lane(s) on this machine (${roster.platform})`);
   console.log('routing (roles by fit, pins override):');
@@ -38,6 +58,20 @@ export async function cmdPlan(args, flags) {
   console.log('estimated spend (heuristic):');
   console.log(lines.join('\n'));
   console.log(`metered lanes: ~${meteredTokens} tokens across the loop (plan lanes ride subscriptions you own)`);
+
+  // expected spend vs budget cap (PRD 6.4): routing shown before any spend
+  const { loadPins } = await import('../store.js');
+  const pins = loadPins();
+  if (pins.budget) {
+    const fits = meteredTokens <= pins.budget;
+    console.log(`\nexpected metered ~${meteredTokens} tok vs budget cap ${pins.budget} tok: ${fits ? 'fits' : 'OVER CAP - router will downshift or park metered lanes'}`);
+  }
+
+  console.log('\nbench (accuracy-per-dollar from real gated history):');
+  for (const { lane, s } of ranked.slice(0, 8)) {
+    if (s) console.log(`  ${lane.name.padEnd(16)} ${s.passed} passed run(s) · ${s.tokens} metered tok · ${(rankScore(s)).toFixed(1)} passes/10k-tok`);
+    else console.log(`  ${lane.name.padEnd(16)} untested - no gated history yet`);
+  }
 
   if (apertusAvailable()) {
     try {

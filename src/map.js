@@ -132,6 +132,21 @@ export function mapIsWarm(map, maxAgeMs = 1000 * 60 * 10) {
 export function whySymbol(map, name) {
   const defs = map.bySymbol.filter((s) => s.name === name || s.name.includes(name));
   const defFiles = new Set(defs.flatMap((d) => d.files));
-  const importers = map.imports.filter((i) => defFiles.has(i.from) || [...defFiles].some((f) => i.spec.includes(f.replace(/\.js$/, ''))));
-  return { symbol: name, definedIn: defs.flatMap((d) => d.files), importedBy: importers.map((i) => i.from).slice(0, 20) };
+  // an importer is a file whose import spec resolves to a defining file
+  // (relative spec './b.js' from 'lib/a.js' -> target 'lib/b.js'); a file's
+  // own outgoing imports never make it an importer.
+  const resolvesToDef = (imp, def) => {
+    if (!imp.spec.startsWith('.')) return false;
+    const base = imp.from.split('/').slice(0, -1);
+    for (const part of imp.spec.split('/').slice(0, -1)) {
+      if (part === '.') continue;
+      else if (part === '..') base.pop();
+      else base.push(part);
+    }
+    return base.join('/') + '/' + imp.spec.split('/').pop() === def;
+  };
+  const importers = map.imports.filter((i) => !defFiles.has(i.from) && [...defFiles].some((f) => resolvesToDef(i, f)));
+  const definedIn = [...new Set(defs.flatMap((d) => d.files))];
+  const importedBy = [...new Set(importers.map((i) => i.from))].slice(0, 20);
+  return { symbol: name, definedIn, importedBy };
 }

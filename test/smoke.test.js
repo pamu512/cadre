@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtempSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -84,7 +84,19 @@ test('meter on an empty home says so honestly', async () => {
   const h = home('meter');
   const r = await cli(h, 'meter');
   assert.equal(r.rc, 0);
-  assert.ok(r.stdout.includes('no runs yet'));
+  assert.ok(r.stdout.includes('no entitlements declared'));
+  assert.ok(r.stdout.includes('--set'), 'must show how to declare one');
+});
+
+test('meter --set / show / pacing round-trip', async () => {
+  const h = home('meter-set');
+  const set = await cli(h, 'meter', '--set', 'lane=test-lane', '--quota', '1000000', '--reset', new Date(Date.now() + 864e5).toISOString());
+  assert.equal(set.rc, 0);
+  const show = await cli(h, 'meter');
+  assert.ok(show.stdout.includes('test-lane'));
+  assert.ok(show.stdout.includes('official'));
+  const bad = await cli(h, 'meter', '--set', 'lane=x', '--quota', '-5');
+  assert.equal(bad.rc, 2);
 });
 
 // ---- sweep ------------------------------------------------------------------
@@ -280,4 +292,65 @@ test('src/commands contains no theater strings', async () => {
     const lit = LITERAL_PLACEHOLDER.exec(noTemplates);
     assert.ok(!lit, `${f} prints a literal placeholder instead of a real value: ${lit?.[0]}`);
   }
+});
+
+// ---- PRD 6.3/6.4/6.5/6.6: locks, scope, quiet hours, meters ----------------
+test('lock lifecycle: acquire -> held -> released', async () => {
+  const h = home('locks');
+  const prev = process.env.CADRE_HOME;
+  process.env.CADRE_HOME = h.dir;
+  try {
+    const { createRun, acquireLock, releaseLock, hasLock, lockPath } = await import(join(ROOT, 'src/store.js'));
+    const r = createRun({ brief: 'lock test', kind: 'go' });
+    acquireLock(r.id, { brief: 'lock test' });
+    assert.ok(hasLock(r.id));
+    releaseLock(r.id, 'test');
+    assert.ok(!hasLock(r.id));
+    assert.ok(existsSync(lockPath(r.id) + '.released'), 'released lock kept as .released');
+  } finally {
+    if (prev) process.env.CADRE_HOME = prev; else delete process.env.CADRE_HOME;
+  }
+});
+
+test('scope lock: creep is caught, in-lock changes are not', async () => {
+  const { buildScopeManifest, scopeCreep } = await import(join(ROOT, 'src/scope.js'));
+  const m = buildScopeManifest({ brief: 'fix login', scope: 'src/auth/** test/auth/**' });
+  assert.deepEqual(scopeCreep(['src/auth/login.js', 'src/models/user.js', 'README.md'], m), ['src/models/user.js', 'README.md']);
+  assert.deepEqual(scopeCreep(['src/auth/login.js', 'test/auth/login.test.js'], m), []);
+  const open = buildScopeManifest({ brief: 'x' });
+  assert.deepEqual(scopeCreep(['anything/here.js'], open), []);
+});
+
+test('minimatch-lite: the globs cadre promises', async () => {
+  const { minimatch } = await import(join(ROOT, 'src/minimatch-lite.js'));
+  assert.ok(minimatch('src/auth/login.js', 'src/auth/**'));
+  assert.ok(minimatch('src/auth/deep/nested/x.js', 'src/**'));
+  assert.ok(minimatch('src/a.js', 'src/*.js'));
+  assert.ok(!minimatch('src/auth/a.js', 'src/*.js'));
+  assert.ok(minimatch('src/x.test.js', 'src/**/*.test.js'));
+  assert.ok(!minimatch('src/x.js', 'src/x.ts'));
+});
+
+test('pin --quiet set/show/clear round-trip', async () => {
+  const h = home('pin-quiet');
+  const set = await cli(h, 'pin', '--quiet', '23:00-07:00');
+  assert.equal(set.rc, 0);
+  const show = await cli(h, 'pin');
+  assert.ok(/23:00.07:00/.test(show.stdout));
+  await cli(h, 'pin', '--clear', 'quiet');
+  assert.ok((await cli(h, 'pin')).stdout.includes('quiet hours: none'));
+});
+
+test('meters: pacing verdicts from quota/reset/used', async () => {
+  const { pacing } = await import(join(ROOT, 'src/meters.js'));
+  assert.equal(pacing({ quota: null, resetAt: null, used: 0 }).state, 'unknown');
+  assert.equal(pacing({ quota: 100, resetAt: new Date(Date.now() + 36e5).toISOString(), used: 100 }).state, 'empty');
+  assert.equal(pacing({ quota: 100, resetAt: new Date(Date.now() + 36e5).toISOString(), used: 95 }).state, 'pacing');
+  assert.equal(pacing({ quota: 100, resetAt: new Date(Date.now() + 36e5).toISOString(), used: 10 }).state, 'ok');
+});
+
+test('economicOrder: included-first ordering', async () => {
+  const { economicOrder } = await import(join(ROOT, 'src/meters.js'));
+  const lanes = [{ name: 'b', cost: 'metered' }, { name: 'c', cost: 'free' }, { name: 'a', cost: 'plan' }, { name: 'd', cost: 'coffee' }];
+  assert.deepEqual(economicOrder(lanes).map((l) => l.cost), ['free', 'plan', 'metered', 'coffee']);
 });

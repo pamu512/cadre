@@ -1,54 +1,63 @@
-// meter - real usage accounting from run records under $CADRE_HOME/runs.
-// Token counts come from actual apertus usage receipts (audit.log + run.json
-// usage fields). No invented quotas or windows.
-import { listRuns, home, auditPath } from '../store.js';
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+// meter - windows, quotas, rollover, resets, pacing (PRD 6.4).
+// Honest ledger: user-declared entitlements (official rails) + real burn from
+// audit receipts. Unknown values are "—", never invented.
+import { loadMeters, usageFromAudit, pacing, renderMeters, saveMeters } from '../meters.js';
 
 export async function cmdMeter(args, flags) {
-  const runs = listRuns();
-  if (runs.length === 0) {
-    console.log('no runs yet - nothing metered.');
-    console.log(`run records live under ${join(home(), 'runs')} once you run cadre go`);
+  const meters = loadMeters();
+
+  // cadre meter --set lane=apertus-8b --provider nebius --quota 2000000 --reset 2026-10-08T00:00:00Z [--rail official]
+  if (flags.set) {
+    const m = String(flags.set);
+    const quota = flags.quota ? Number(flags.quota) : null;
+    if (flags.quota && (!Number.isFinite(quota) || quota <= 0)) {
+      console.error('--quota must be a positive number of tokens');
+      return 2;
+    }
+    if (flags.reset && Number.isNaN(new Date(flags.reset).getTime())) {
+      console.error('--reset must be an ISO date');
+      return 2;
+    }
+    const entry = {
+      lane: m, provider: flags.provider || null,
+      quota_tokens: quota, reset_at: flags.reset || null,
+      rollover_tokens: flags.rollover ? Number(flags.rollover) : null,
+      rail: flags.rail || 'official', // official = read off your dashboard; header = flagged fallback
+      updated: new Date().toISOString(),
+    };
+    saveMeters([...meters.filter((x) => x.lane !== m), entry]);
+    console.log(`meter set: ${m} — ${entry.quota_tokens ?? '—'} tok, reset ${entry.reset_at || '—'}, rail ${entry.rail}`);
+    console.log('  (official rails only: values you read off your provider dashboard; nothing scraped)');
     return 0;
   }
 
-  // aggregate real usage per lane from audit.log apertus-call events
-  const perLane = new Map();
-  let anyMetered = false;
-  if (existsSync(auditPath())) {
-    for (const line of readFileSync(auditPath(), 'utf-8').split('\n')) {
-      if (!line.trim()) continue;
-      let ev; try { ev = JSON.parse(line); } catch { continue; }
-      if (ev.kind === 'apertus-call' && ev.usage) {
-        anyMetered = true;
-        const cur = perLane.get(ev.lane) || { calls: 0, tokens: 0 };
-        cur.calls += 1;
-        cur.tokens += ev.usage.total_tokens || 0;
-        perLane.set(ev.lane, cur);
-      }
-    }
+  const usage = usageFromAudit();
+
+  if (meters.length === 0 && usage.size === 0) {
+    console.log('no entitlements declared and no usage recorded yet.');
+    console.log('\ndeclare one (official rail — your dashboard numbers):');
+    console.log('  cadre meter --set lane=apertus-8b --provider nebius --quota 2000000 --reset 2026-10-08T00:00:00Z');
+    console.log('\nusage burns are recorded automatically from run receipts (audit.log).');
+    return 0;
   }
 
-  console.log(`METERS · ${runs.length} run(s) recorded under ${home()}`);
-  const bar = (frac) => {
-    const filled = Math.round(Math.max(0, Math.min(1, frac)) * 12);
-    return '█'.repeat(filled) + '░'.repeat(12 - filled);
-  };
-  if (perLane.size === 0) {
-    console.log('no metered calls recorded yet (apertus lanes meter when keyed)');
-  } else {
-    const total = [...perLane.values()].reduce((s, v) => s + v.tokens, 0);
-    for (const [lane, v] of perLane) {
-      console.log(`${lane.padEnd(14)} ${String(v.calls).padStart(3)} calls  ${bar(v.tokens / Math.max(total, 1))}  ${v.tokens} tok`);
-    }
-    console.log(`total metered: ${total} tokens across ${[...perLane.values()].reduce((s, v) => s + v.calls, 0)} call(s)`);
+  if (flags.json) {
+    console.log(JSON.stringify({
+      entitlements: meters,
+      usage: Object.fromEntries([...usage.entries()].map(([lane, v]) => [lane, v])),
+      pacing: Object.fromEntries(meters.map((m) => [m.lane, pacing({ quota: m.quota_tokens, resetAt: m.reset_at, used: usage.get(m.lane)?.tokens || 0 })])),
+    }, null, 2));
+    return 0;
   }
 
-  // run statuses: what's open vs settled
-  const open = runs.filter((r) => ['running', 'interrupted', 'gating'].includes(r.status));
-  console.log(`\nruns: ${runs.length - open.length} settled · ${open.length} open${open.length ? ' (' + open.map((r) => r.id + ' ' + r.status).join(', ') + ')' : ''}`);
-  const pins = JSON.parse(existsSync(join(home(), 'pins.json')) ? readFileSync(join(home(), 'pins.json'), 'utf-8') : '{"budget":null}');
-  console.log(`budget pin: ${pins.budget ? pins.budget + ' tokens' : 'none set (cadre pin --budget <n> to cap)'}`);
+  console.log('cadre meter — entitlement ledger (official rails; "—" = unknown, never invented)');
+  const lines = renderMeters({ meters, usage });
+  console.log(lines.length ? lines.join('\n') : '  (no entitlements declared — see --set above)');
+
+  if (usage.size > 0) {
+    console.log('\nreal burn (from audit receipts):');
+    for (const [lane, v] of usage) console.log(`  ${lane.padEnd(16)} ${v.calls} call(s) · ${v.tokens} tok`);
+  }
+  console.log('\npolicy: included-first ordering · pace-to-window · degrade-on-empty (downshift → park metered behind budget gate → pause with resume plan)');
   return 0;
 }

@@ -4,15 +4,17 @@
 // re-checks artifacts on disk before stamping anything.
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { buildRoster } from '../scan.js';
 import { assignRoles, explainRouting } from '../router.js';
 import { apertusAvailable, apertusChat, auditCall } from '../apertus.js';
 import { gateVerdict, renderGateReport, verifyCommands } from '../gate.js';
 import { invokeLane } from '../invoke.js';
+import { buildScopeManifest, scopeCreep, renderManifest } from '../scope.js';
 import {
   createRun, updateRun, appendLog, addEvidence, audit, listRuns, loadPins, home,
+  acquireLock, releaseLock,
 } from '../store.js';
 
 const run = promisify(execFile);
@@ -67,13 +69,22 @@ export async function cmdGo(args, flags, { cwd = process.cwd() } = {}) {
 
   const roster = await buildRoster();
   const routing = assignRoles(roster, { brief });
+  // scope lock (PRD 6.6): manifest before work breathes
+  const manifest = buildScopeManifest({ brief, scope: flags.scope, cwd });
   const record = createRun({
     brief, kind: 'go',
     roles: Object.fromEntries(routing.assignments.map((a) => [a.role, a.lane])),
+    meta: { scope: manifest },
   });
+  acquireLock(record.id, { brief });
   console.log(`cadre go - run ${record.id} · ${brief}`);
   console.log(`roster · ${roster.lanes.length} lane(s)`);
   console.log(explainRouting(routing).replace(/^/gm, '  '));
+  if (flags.scope) {
+    console.log('scope lock:');
+    console.log(renderManifest(manifest).replace(/^/gm, '  '));
+  }
+  appendLog(record.id, `SCOPE MANIFEST:\n${renderManifest(manifest)}`);
   appendLog(record.id, `routing: ${routing.assignments.map((a) => `${a.role}=${a.lane}`).join(' ')}`);
   audit({ kind: 'run-start', run: record.id, brief, roles: record.roles });
 
@@ -137,15 +148,19 @@ export async function cmdGo(args, flags, { cwd = process.cwd() } = {}) {
       }
     } catch (e) {
       buildOutput = e.stdout || '';
+      const axTail = String(e.stdout || e.stderr || e.message).trim().split('\n').filter(Boolean).slice(-5).join('\n      ');
       console.error(`builder · ${builder.name} failed: ${e.message.split('\n')[0]}`);
+      if (axTail) console.error(`      ${axTail}`);
       appendLog(record.id, `BUILD FAILED (${builder.name}): ${e.message.slice(0, 2000)}`);
       await updateRun(record.id, { status: 'failed', ended: new Date().toISOString() });
       audit({ kind: 'run-end', run: record.id, status: 'failed' });
+      releaseLock(record.id, 'build-failed');
       return 1;
     }
   } else {
     console.error('builder · no fitting lane - roster too thin to build');
     await updateRun(record.id, { status: 'failed', ended: new Date().toISOString() });
+    releaseLock(record.id, 'no-builder');
     return 1;
   }
 
@@ -203,11 +218,17 @@ export async function cmdGo(args, flags, { cwd = process.cwd() } = {}) {
         const [plus, minus, file] = line.split('\t');
         await addEvidence(record.id, { kind: 'diff', label: file, path: file, plus: Number(plus) || 0, minus: Number(minus) || 0 });
       }
-      // untracked files = artifacts
+      // untracked files = artifacts + diffs (a new file's diff is all-plus:
+      // count its added lines so a first-commit repo can still prove "diffs")
       for (const line of after.porcelain.split('\n').filter((l) => l.startsWith('??'))) {
         const p = line.slice(3).trim();
-        if (existsSync(resolve(cwd, p))) {
+        const full = resolve(cwd, p);
+        if (existsSync(full) && statSync(full).isFile()) {
           await addEvidence(record.id, { kind: 'artifact', label: p, path: p });
+          try {
+            const lines = readFileSync(full, 'utf-8').split('\n').length;
+            await addEvidence(record.id, { kind: 'diff', label: `${p} (new file)`, path: p, plus: lines, minus: 0 });
+          } catch { /* unreadable (binary?) - artifact evidence still filed */ }
         }
       }
       console.log(`diffs · ${after.numstat.split('\n').filter(Boolean).length} file(s) changed`);
@@ -219,6 +240,26 @@ export async function cmdGo(args, flags, { cwd = process.cwd() } = {}) {
 
   // ---- 5. gate --------------------------------------------------------------
   console.log('\n── gate ─────────────────────────────');
+  // scope-creep check (PRD 6.6): diff outside the lock is caught here, with citation
+  if (after && after.porcelain.trim().length > 0) {
+    const changed = after.numstat.split('\n').filter(Boolean).map((l) => l.split('\t')[2]);
+    const creep = scopeCreep(changed, manifest);
+    if (creep.length > 0) {
+      appendLog(record.id, `SCOPE CREEP caught at gate: ${creep.join(', ')} (lock: ${manifest.lock.join(' ')}) — "not in the ask"`);
+      console.log(`scope · ✗ creep caught: ${creep.join(', ')} — not in the ask (see run.log)`);
+      const cur = updateRun(record.id, {
+        status: 'rejected',
+        verdict: { passed: false, missing: [], summary: `scope creep: ${creep.join(', ')}` },
+        ended: new Date().toISOString(),
+      });
+      audit({ kind: 'run-end', run: record.id, status: 'rejected', creep });
+      releaseLock(record.id, 'rejected-scope-creep');
+      console.log(`\n✗ run ${record.id} REJECTED - work outside the scope lock`);
+      return 1;
+    } else if (flags.scope) {
+      console.log('scope · ✓ all changes inside the lock');
+    }
+  }
   const cur = updateRun(record.id, {
     status: 'gating',
     usage: { metered_tokens: meteredTokens, budget_tokens: budgetTokens },
@@ -245,6 +286,7 @@ export async function cmdGo(args, flags, { cwd = process.cwd() } = {}) {
     ended: new Date().toISOString(),
   });
   audit({ kind: 'run-end', run: record.id, status: finalStatus, metered_tokens: meteredTokens });
+  releaseLock(record.id, finalStatus);
 
   console.log(`\n${gate.passed ? '✓' : '✗'} run ${record.id} ${gate.passed ? 'PROVEN' : `not proven - ${gate.summary}`}`);
   console.log(`  metered ${meteredTokens} of ${budgetTokens} token budget · proof: cadre proof ${record.id} · replay: cadre watch ${record.id}`);

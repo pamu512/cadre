@@ -107,10 +107,37 @@ export function loadPins() {
     return { roles: {}, budget: null, quiet_hours: null };
   }
 }
-
 export function savePins(pins) {
   mkdirSync(home(), { recursive: true });
-  writeFileSync(pinsPath(), JSON.stringify(pins, null, 2));
+  writeFileSync(pinsPath(), JSON.stringify({ roles: {}, budget: null, quiet_hours: null, ...pins }, null, 2));
+}
+
+export function lockPath(id) { return join(runDir(id), 'lock'); }
+
+// Lock-before-work-breathes: acquire at run start, release on settle.
+// A lock outliving its run (crash/kill) is what sweep triages.
+export function acquireLock(id, { pid = process.pid, brief = '' } = {}) {
+  mkdirSync(runDir(id), { recursive: true });
+  const lock = { id, pid, brief, acquired: new Date().toISOString() };
+  writeFileSync(lockPath(id), JSON.stringify(lock, null, 2));
+  return lock;
+}
+
+export function releaseLock(id, reason = 'settled') {
+  const p = lockPath(id);
+  if (existsSync(p)) {
+    appendLog(id, `lock released (${reason})`);
+    try { renameSync(p, p + '.released'); } catch { /* best effort */ }
+  }
+}
+
+export function hasLock(id) { return existsSync(lockPath(id)); }
+
+export function listLockedRuns() {
+  return listRunIds()
+    .map((n) => String(n).padStart(4, '0'))
+    .filter((id) => hasLock(id))
+    .map((id) => ({ id, lock: (() => { try { return JSON.parse(readFileSync(lockPath(id), 'utf-8')); } catch { return null; } })() }));
 }
 
 export function loadMeters() {

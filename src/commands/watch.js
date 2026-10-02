@@ -35,6 +35,19 @@ export async function cmdWatch(args, flags) {
   const run = tryReadRun(runId);
   if (!run) { console.error(`no run ${runId} under ${runsDir()}`); return 1; }
 
+  // --replay (PRD 6.3): print the settled run's log from the top — every step,
+  // in order, from the ledger. This is the contention answer: watch what already
+  // ran without re-running it.
+  if (flags.replay) {
+    const log = runLogPath(runId);
+    if (!existsSync(log)) { console.error(`no run.log for ${runId}`); return 1; }
+    console.log(`replay run ${runId} (${run.status}) — full log from the ledger:`);
+    console.log('─'.repeat(52));
+    process.stdout.write(readFileSync(log, 'utf-8'));
+    console.log('─'.repeat(52));
+    return 0;
+  }
+
   const log = runLogPath(runId);
   console.log(`watching run ${runId} (${log})`);
   let lastSize = existsSync(log) ? statSync(log).size : 0;
