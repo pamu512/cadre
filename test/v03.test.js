@@ -109,3 +109,19 @@ test('C6: sweep --release handles a missing/empty registry cleanly', async () =>
   assert.ok([0, 1].includes(r.rc));
   assert.ok(r.stdout.includes('no [active]') || r.stdout.includes('released') || r.stderr.includes('ax not found'));
 });
+
+test('install path: PROVEN in a non-git project (fs-mode diff evidence)', { timeout: 120000 }, async () => {
+  const h = home('nogit');
+  const proj = mkdtempSync(join(tmpdir(), 'cadre-nogit-'));
+  writeFileSync(join(proj, 'package.json'), JSON.stringify({ name: 'nogit', scripts: { test: 'node -e "process.exit(0)"' } }));
+  // the fixture-writer lane, with an absolute script path (install-path lesson)
+  mkdirSync(join(h.dir, 'lanes'), { recursive: true });
+  writeFileSync(join(h.dir, 'lanes', 'file-writer.json'), JSON.stringify({
+    name: 'file-writer', good_at: ['create', 'write', 'fixtures'], cost: 'free', talks: 'terminal', proves: 'commands',
+    invoke: { kind: 'command', command: `/bin/sh ${join(ROOT, 'scripts/fixture-writer.sh')} {brief}` },
+  }));
+  const r = await run('node', [BIN, 'go', 'create out.txt containing the single line: nogit-works', '--scope', 'out.txt*'], { cwd: proj, timeout: 90000, env: h.env });
+  assert.ok(r.stdout.includes('gate: PROVEN'), `gate must prove without git, got: ${r.stdout.split('\n').slice(-6).join(' | ')}`);
+  assert.ok(existsSync(join(proj, 'out.txt')));
+  assert.equal(readFileSync(join(proj, 'out.txt'), 'utf-8').trim(), 'nogit-works');
+});

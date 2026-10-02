@@ -4,7 +4,7 @@
 // re-checks artifacts on disk before stamping anything.
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { buildRoster } from '../scan.js';
 import { assignRoles, explainRouting } from '../router.js';
@@ -31,6 +31,33 @@ function detectTestCommand(cwd) {
   if (existsSync(join(cwd, 'Cargo.toml'))) return { cmd: 'cargo', args: ['test'], label: 'cargo test' };
   if (existsSync(join(cwd, 'pyproject.toml'))) return { cmd: 'python3', args: ['-m', 'pytest'], label: 'pytest' };
   return null;
+}
+
+// fs snapshot for non-git projects: the diff family must not be git-only
+function fsSnapshot(cwd) {
+
+  const snap = new Map();
+  const walk = (dir, prefix) => {
+    let entries;
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (e.name.startsWith('.') || e.name === 'node_modules') continue;
+      const full = join(dir, e.name);
+      const rel = prefix ? prefix + '/' + e.name : e.name;
+      if (e.isDirectory()) walk(full, rel);
+      else {
+        try { snap.set(rel, statSync(full).mtimeMs + ':' + statSync(full).size); } catch { /* raced */ }
+      }
+    }
+  };
+  walk(cwd, '');
+  return snap;
+}
+
+function fsDiff(before, after) {
+  const out = [];
+  for (const [f, sig] of after) if (!before.has(f) || before.get(f) !== sig) out.push({ file: f, isNew: !before.has(f) });
+  return out;
 }
 
 async function gitState(cwd) {
@@ -239,12 +266,13 @@ meteredTokens += (res.usage?.total_tokens || 0);
   // ---- 2. build ------------------------------------------------------------
   console.log('\n── build ────────────────────────────');
   const before = await gitState(cwd);
+  globalThis.CADRE_FS_SNAPSHOT = before ? null : fsSnapshot(cwd);
   const builder = byRole.builder;
   let buildOutput = '';
   if (builder) {
     try {
       console.log(`builder · ${builder.name} on the task`);
-      const res = await invokeLane(builder, brief, { timeoutMs: 1000 * 60 * 30, override: Boolean(flags.override), context: flags.context });
+      const res = await invokeLane(builder, brief, { timeoutMs: 1000 * 60 * 30, override: Boolean(flags.override), context: flags.context, cwd });
       buildOutput = res.stdout || res.text || '';
       // B5 frugal pipes: compress before the ledger; original backed up, savings counted
       const { compressOutput } = await import('../frugal.js');
@@ -320,8 +348,16 @@ meteredTokens += (res.usage?.total_tokens || 0);
     appendLog(record.id, 'VERIFY skipped: no test command detected');
   }
 
-  // diff evidence from git
+  // diff evidence from git — or from an fs snapshot when the project isn't a repo
   const after = await gitState(cwd);
+  if (!before && !after && globalThis.CADRE_FS_SNAPSHOT) {
+    const afterSnap = fsSnapshot(cwd);
+    const changed = fsDiff(globalThis.CADRE_FS_SNAPSHOT, afterSnap);
+    for (const c of changed.slice(0, 50)) {
+      await addEvidence(record.id, { kind: 'diff', label: `${c.file} (${c.isNew ? 'new file' : 'modified'})`, path: c.file, plus: c.isNew ? 1 : 1, minus: 0 });
+    }
+    if (changed.length) console.log(`diffs · ${changed.length} file(s) changed (fs mode - not a git repo)`);
+  }
   if (before && after) {
     const changedNow = after.porcelain.trim().length > 0;
     if (changedNow) {

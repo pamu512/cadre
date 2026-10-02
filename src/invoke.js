@@ -48,7 +48,7 @@ export async function invokeLane(lane, task, opts = {}) {
     let args = parts.slice(1).map((a) => a.replaceAll('{brief}', task));
     if (!tpl.includes('{brief}')) args = [...args, task]; // no placeholder: brief becomes the trailing arg
     try {
-      const { stdout } = await run(parts[0], args, { timeout: timeoutMs, maxBuffer: 1024 * 1024 * 16 });
+      const { stdout } = await run(parts[0], args, { timeout: timeoutMs, maxBuffer: 1024 * 1024 * 16, cwd: opts.cwd || process.cwd() });
       return { ok: true, kind, stdout };
     } catch (e) {
       return { ok: false, kind, error: String(e.message).slice(0, 500), stdout: e.stdout || '' };
