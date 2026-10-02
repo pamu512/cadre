@@ -54,6 +54,48 @@ export function computeMetrics() {
 const fmt = (v, suffix = '') => (v == null ? '—' : `${typeof v === 'number' ? Math.round(v * 1000) / 1000 : v}${suffix}`);
 
 export async function cmdMetrics(args, flags) {
+  // #10: --report generates docs/BEYOND-PARITY.md from the ledger (never hand-written)
+  if (flags.report) {
+    const { writeFileSync, mkdirSync, readFileSync, existsSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const m = computeMetrics();
+    // parity ledger rows, if any
+    let parityRows = [];
+    const pl = join(home(), 'parity-ledger.jsonl');
+    if (existsSync(pl)) {
+      parityRows = readFileSync(pl, 'utf-8').split('\n').filter(Boolean).map((l) => {
+        try { return JSON.parse(l); } catch { return null; }
+      }).filter(Boolean);
+    }
+    const pct = (v) => (v == null ? '—' : (v * 100).toFixed(1) + '%');
+    const md = [
+      '# Beyond Parity — generated from the ledger',
+      '',
+      `Generated: ${new Date().toISOString()} by \`cadre metrics --report\` — do not edit by hand; regenerate instead.`,
+      '',
+      '## Run ledger',
+      '',
+      `- runs recorded: **${m.runs_total}** (settled ${m.runs_settled})`,
+      `- false-DONE rate: **${pct(m.false_done_rate)}** (${m.false_done_count} rejected/failed with claimed command evidence) — target ≤ 5%`,
+      `- sweep recovery: **${m.swept ? pct(m.sweep_recovery_rate) : '—'}** (${m.swept} swept) — target ≥ 90%, 0 silent losses`,
+      `- metered burn per passed run: **${m.passed_runs ? Math.round(m.metered_burn_per_passed_run) + ' tok' : '—'}** over ${m.passed_runs} passed run(s)`,
+      `- median settle time: **${m.median_settle_seconds != null ? m.median_settle_seconds.toFixed(1) + 's' : '—'}**`,
+      '',
+      '## Parity ledger',
+      '',
+    ];
+    if (parityRows.length === 0) md.push('_no parity runs recorded yet_');
+    else {
+      md.push('| run | verdict | ref | evidence |', '|---|---|---|---|');
+      for (const e of parityRows.slice(-25)) md.push(`| ${e.run} | ${e.verdict} | ${(e.ref || '—').replace(/\|/g, '/')} | ${e.evidence_count} |`);
+    }
+    const out = join(process.cwd(), 'docs', 'BEYOND-PARITY.md');
+    mkdirSync(join(process.cwd(), 'docs'), { recursive: true });
+    writeFileSync(out, md.join('\n') + '\n');
+    console.log(`report written: ${out} (from ${m.runs_total} runs, ${parityRows.length} parity entries)`);
+    return 0;
+  }
+
   const m = computeMetrics();
 
   if (flags.json) {

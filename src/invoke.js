@@ -39,7 +39,12 @@ export async function invokeLane(lane, task, opts = {}) {
     // B2's local-builder path: any CLI on this machine becomes a builder lane.
     const tpl = String(lane.invoke.command || '');
     if (!tpl) return { ok: false, kind, error: 'invoke.command missing' };
-    const parts = tpl.split(/\s+/);
+    // split honoring single/double quotes (a plain whitespace split would break
+    // any templated argument containing spaces)
+    const parts = [];
+    const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
+    let m;
+    while ((m = re.exec(tpl)) !== null) parts.push(m[1] ?? m[2] ?? m[3]);
     let args = parts.slice(1).map((a) => a.replaceAll('{brief}', task));
     if (!tpl.includes('{brief}')) args = [...args, task]; // no placeholder: brief becomes the trailing arg
     try {

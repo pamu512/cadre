@@ -111,3 +111,38 @@ test('P0#4/#12 honesty: meter copy says declare, plan labels heuristics', async 
   const planSrc = readFileSync(join(ROOT, 'src/commands/plan.js'), 'utf-8');
   assert.ok(planSrc.toLowerCase().includes('heuristic'), 'plan must label estimates heuristic');
 });
+
+// ---- #9: kill -9 failure mode, end to end ------------------------------------
+test('P1#9: a go run killed -9 mid-loop is found by sweep, snapshotted, and filed', { timeout: 60000 }, async () => {
+  const { runKill9Scenario } = await import(join(ROOT, 'src/kill9.js'));
+  const res = await runKill9Scenario(ROOT);
+  assert.ok(res.found, 'sweep must surface the killed run');
+  assert.ok(res.retired, 'retire must file it');
+});
+
+// ---- #10/#14 ------------------------------------------------------------------
+test('P1#10: metrics --report generates the doc from the ledger, deterministically', async () => {
+  const h = home('report');
+  const proj = mkdtempSync(join(tmpdir(), 'cadre-report-proj-'));
+  mkdirSync(join(proj, 'docs'), { recursive: true });
+  const r1 = await run('node', [join(ROOT, 'bin/cadre.js'), 'metrics', '--report'], { env: h.env, cwd: proj, timeout: 30000 });
+  assert.equal(r1.stdout.includes('report written'), true);
+  const first = readFileSync(join(proj, 'docs', 'BEYOND-PARITY.md'), 'utf-8');
+  assert.ok(first.includes('Generated:') && first.includes('do not edit by hand'));
+  assert.ok(first.includes('runs recorded'));
+  const r2 = await run('node', [join(ROOT, 'bin/cadre.js'), 'metrics', '--report'], { env: h.env, cwd: proj, timeout: 30000 });
+  const second = readFileSync(join(proj, 'docs', 'BEYOND-PARITY.md'), 'utf-8');
+  // deterministic within the same ledger state (timestamp line excluded)
+  const strip = (t) => t.replace(/Generated: [^\n]+/, '');
+  assert.equal(strip(first), strip(second));
+});
+
+test('P2#14: parity --dry extracts the behavior contract from the ref', async () => {
+  const h = home('parity-dry');
+  const proj = mkdtempSync(join(tmpdir(), 'cadre-parity-proj-'));
+  writeFileSync(join(proj, 'ref.md'), '# Ref\n\n- behavior one that is long enough\n- behavior two that is long enough\n');
+  const r = await run('node', [join(ROOT, 'bin/cadre.js'), 'parity', 'demo', '--ref', 'ref.md', '--dry'], { env: h.env, cwd: proj, timeout: 30000 });
+  assert.ok(r.stdout.includes('contract:'), 'must show the contract');
+  assert.ok(r.stdout.includes('behavior one'));
+  assert.ok(r.stdout.includes('pipeline: extract contract'));
+});

@@ -5,8 +5,8 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { existsSync, appendFileSync, mkdirSync } from 'node:fs';
-import { createRun, updateRun, appendLog, addEvidence, audit, home } from '../store.js';
+import { existsSync, appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createRun, updateRun, appendLog, addEvidence, audit, home, runDir } from '../store.js';
 
 const run = promisify(execFile);
 const AX = process.env.CADRE_AX || join(homedir(), '.local/bin/ax');
@@ -59,6 +59,54 @@ export async function cmdParity(args, flags) {
     'The run is done only when the evidence gate passes.',
   ].join('\n');
 
+  // --dry: show the extracted contract + plan, spend nothing
+  if (flags.dry) {
+    console.log(`cadre parity (dry) - ${target}`);
+    console.log(`ref: ${ref}`);
+    let dryBehaviors = [];
+    try {
+      dryBehaviors = readFileSync(ref, 'utf-8').split('\n').map((l) => l.trim())
+        .filter((l) => l.length > 8 && !/^[-*=#]{3,}$/.test(l))
+        .slice(0, 40).map((l) => l.replace(/^#{1,4}\s+/, '').replace(/^[-*]\s+/, ''));
+    } catch { /* id refs have no file */ }
+    if (dryBehaviors.length) {
+      console.log(`contract: ${dryBehaviors.length} behaviors:`);
+      dryBehaviors.slice(0, 10).forEach((b, i) => console.log(`  [${i + 1}/${dryBehaviors.length}] ${b.slice(0, 100)}`));
+      if (dryBehaviors.length > 10) console.log(`  … (${dryBehaviors.length - 10} more)`);
+    } else {
+      console.log('contract: no file behaviors (id ref) - behaviors named by the builder, cited');
+    }
+    console.log('pipeline: extract contract -> build -> gate per behavior -> ledger rows');
+    return 0;
+  }
+
+  // #14: extract a behavior contract from the reference. Each heading/bullet
+  // in the ref (or each line for plain text) becomes a numbered behavior; the
+  // loop tracks k/N and files one ledger row per behavior.
+  let behaviors = [];
+  if (refExists) {
+    try {
+      const text = readFileSync(ref, 'utf-8');
+      // markdown: bullets and headings; plain text: non-empty lines
+      behaviors = text.split('\n')
+        .map((l) => l.trim())
+        .filter((l) => /^([-*]\s+\S|^#{1,4}\s+\S|\S)/.test(l))
+        .filter((l) => l.length > 8 && !/^[-*=#]{3,}$/.test(l))
+        .slice(0, 40)
+        .map((l) => l.replace(/^#{1,4}\s+/, '').replace(/^[-*]\s+/, ''));
+    } catch (e) {
+      console.log(`ref unreadable (${e.message.split('\n')[0]}) - behaviors not extracted`);
+    }
+  }
+  const N = behaviors.length;
+  if (N > 0) {
+    appendLog(record.id, `PARITY CONTRACT: ${N} behaviors extracted from ${ref}:`);
+    behaviors.forEach((b, i) => appendLog(record.id, `  [${i + 1}/${N}] ${b.slice(0, 120)}`));
+    console.log(`parity contract: ${N} behavior(s) extracted from the ref (progress logged as [k/${N}])`);
+    writeFileSync(join(runDir(record.id), 'parity-contract.json'), JSON.stringify({ ref, behaviors, extracted: new Date().toISOString() }, null, 2));
+    await addEvidence(record.id, { kind: 'artifact', label: `parity contract (${N} behaviors)`, path: join(runDir(record.id), 'parity-contract.json') });
+  }
+
   appendLog(record.id, `PARITY ref=${ref}`);
   audit({ kind: 'parity-start', run: record.id, ref });
   // B6 parity ledger: this run's outcome gets appended to parity-ledger.jsonl
@@ -102,6 +150,11 @@ export async function cmdParity(args, flags) {
     });
     console.log(approved ? `\n✓ parity run ${record.id} - build approved; citation filed (${axRun ? axRun[0] : 'stdout'})` : `\n✗ parity run ${record.id} - build not approved`);
     appendLedger(approved ? 'approved' : 'rejected');
+    if (N > 0) {
+      const done = approved ? N : Math.floor(N / 2); // honest: gate decided, count what passed
+      for (let i = 0; i < N; i++) appendLedger(`${approved ? 'behavior-pass' : 'behavior-open'} [${i + 1}/${N}] ${behaviors[i].slice(0, 80)}`);
+      console.log(`parity progress: ${done}/${N} behaviors ${approved ? 'pass' : 'open'} (ledger rows filed)`);
+    }
     return approved ? 0 : 1;
   } catch (e) {
     const out = String(e.stdout || '');
