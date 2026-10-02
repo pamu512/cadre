@@ -1,7 +1,7 @@
 // Smoke tests - one per command class, against the real CLI with an isolated
 // $CADRE_HOME. No network, no ax builds: heavy paths are exercised up to the
 // point where they would spend (arg validation, routing, state) and the
-// engine modules (gate, store, router, map, apertus config) are unit-tested.
+// engine modules (gate, store, router, map, chat config) are unit-tested.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
@@ -251,26 +251,28 @@ test('router: roles assign from a roster, pins win', async () => {
   delete process.env.CADRE_HOME;
 });
 
-test('apertus: no key -> CADRE_SKIP, never fake success', async () => {
-  const h = home('apertus');
-  const saved = process.env.APERTUS_API_KEY;
-  delete process.env.APERTUS_API_KEY;
-  const { apertusChat, keyFingerprint, apertusAvailable } = await import(join(ROOT, 'src/apertus.js'));
-  assert.equal(apertusAvailable(), false);
-  assert.equal(keyFingerprint(), null);
-  await assert.rejects(() => apertusChat([{ role: 'user', content: 'hi' }]), (e) => e.code === 'CADRE_SKIP');
-  if (saved) process.env.APERTUS_API_KEY = saved;
+test('chatlane: no key -> CADRE_SKIP, never fake success', async () => {
+  const h = home('chatlane');
+  const saved = process.env.OPENAI_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+  const { chatLane, resolveChat } = await import(join(ROOT, 'src/chatlane.js'));
+  const lane = { name: 'probe', invoke: { kind: 'openai-compatible', api_key_env: 'OPENAI_API_KEY', base_url: 'https://api.openai.com/v1', model: 'gpt-4o-mini' } };
+  try {
+    await chatLane(lane, [{ role: 'user', content: 'hi' }]);
+    assert.fail('should have thrown');
+  } catch (e) {
+    assert.equal(e.code, 'CADRE_SKIP');
+    assert.ok(e.message.includes('skipped'));
+  }
+  if (saved) process.env.OPENAI_API_KEY = saved; else delete process.env.OPENAI_API_KEY;
 });
 
-test('apertus: fingerprint is 6 hex chars, never the key', async () => {
-  const saved = process.env.APERTUS_API_KEY;
-  process.env.APERTUS_API_KEY = 'test-key-do-not-print';
-  const { keyFingerprint, apertusConfig } = await import(join(ROOT, 'src/apertus.js'));
-  const fp = keyFingerprint();
-  assert.match(fp, /^[0-9a-f]{6}$/);
-  assert.notEqual(fp, 'test-key-do-not-print');
-  assert.ok(String(apertusConfig().url).includes('/v1/chat/completions'));
-  if (saved) process.env.APERTUS_API_KEY = saved; else delete process.env.APERTUS_API_KEY;
+test('chatlane: URL joining with and without /v1', async () => {
+  const { resolveChat } = await import(join(ROOT, 'src/chatlane.js'));
+  const { url } = resolveChat({ invoke: { kind: 'openai-compatible', base_url: 'https://x.example.com' } });
+  assert.ok(url.href.includes('/v1/chat/completions'));
+  const { url: u2 } = resolveChat({ invoke: { kind: 'openai-compatible', base_url: 'https://x.example.com/v1' } });
+  assert.ok(u2.href.endsWith('/v1/chat/completions'));
 });
 
 // ---- theater ban ------------------------------------------------------------

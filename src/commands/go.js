@@ -8,7 +8,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'no
 import { join, resolve } from 'node:path';
 import { buildRoster } from '../scan.js';
 import { assignRoles, explainRouting } from '../router.js';
-import { auditCall } from '../apertus.js';
+import { auditCall } from '../laneaudit.js';
 import { chatLaneAvailable, chatLane } from '../chatlane.js';
 import { gateVerdict, renderGateReport, verifyCommands } from '../gate.js';
 import { invokeLane } from '../invoke.js';
@@ -101,7 +101,7 @@ export async function cmdGo(args, flags, { cwd = process.cwd() } = {}) {
   // Prefer a non-ax builder: a user command-kind lane, else a keyed chat lane.
   if (flags.local) {
     const userCmd = roster.lanes.find((l) => l.invoke?.kind === 'command');
-    const chatL = roster.lanes.find((l) => ['openai-compatible', 'http-chat', 'apertus'].includes(l.invoke?.kind) && chatLaneAvailable(l));
+    const chatL = roster.lanes.find((l) => ['openai-compatible', 'http-chat', 'chat'].includes(l.invoke?.kind) && chatLaneAvailable(l));
     if (userCmd || chatL) {
       byRole.builder = userCmd || chatL;
       appendLog(record.id, `LOCAL loop: builder=${byRole.builder.name} (ax skipped by --local)`);

@@ -18,14 +18,14 @@ export function saveMeters(meters) {
   writeFileSync(join(home(), 'meters.json'), JSON.stringify(meters, null, 2));
 }
 
-// usage per lane from audit receipts (apertus-call events carry usage)
+// usage per lane from audit receipts (lane-call events carry usage)
 export function usageFromAudit() {
   const per = new Map();
   if (!existsSync(auditPath())) return per;
   for (const line of readFileSync(auditPath(), 'utf-8').split('\n')) {
     if (!line.trim()) continue;
     let ev; try { ev = JSON.parse(line); } catch { continue; }
-    if ((ev.kind === 'apertus-call' || ev.kind === 'lane-call') && ev.usage) {
+    if ((ev.kind === 'lane-call') && ev.usage) {
       const cur = per.get(ev.lane) || { calls: 0, tokens: 0 };
       cur.calls += 1;
       cur.tokens += ev.usage.total_tokens || 0;

@@ -18,7 +18,7 @@ export async function cmdPin(args, flags) {
   const pins = loadPins();
 
   // cadre pin                          -> show
-  // cadre pin --role planner=apertus-8b
+  // cadre pin --role planner=<lane-name>
   // cadre pin --budget 50000
   // cadre pin --quiet 23:00-07:00
   // cadre pin --clear role|budget|quiet
@@ -36,7 +36,7 @@ export async function cmdPin(args, flags) {
   let changed = false;
   if (flags.role) {
     const m = /^(\w+)=(\S+)$/.exec(String(flags.role));
-    if (!m) { console.error('pin --role expects <role>=<lane>, e.g. --role critic=apertus-70b'); return 2; }
+    if (!m) { console.error('pin --role expects <role>=<lane>, e.g. --role critic=<lane-name>'); return 2; }
     const [, role, lane] = m;
     const roster = await buildRoster();
     if (!roster.lanes.some((l) => l.name === lane)) {

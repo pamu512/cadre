@@ -1,5 +1,5 @@
 const LINES = [
-  'cadre - the model-agnostic harness (experiment; wraps ax + Apertus)',
+  'cadre - the model-agnostic harness (experiment; wraps ax + any provider)',
   '',
   '  cadre go "<outcome>"     the one command - scan the room, form the crew, run',
   '                           plan/build/critique/verify, gate on evidence',
@@ -24,7 +24,7 @@ const LINES = [
   '  cadre mcp                MCP server on stdio (tools: lanes, plan, map, proof, meter)',
   '',
   'state: $CADRE_HOME (default ~/.cadre) · runs (with locks), pins, meters, maps, audit.log',
-  'apertus: export APERTUS_API_KEY (optionally APERTUS_BASE_URL) to enable',
+  'chat lanes: any OpenAI-compatible env-keyed provider (see scan) enables drafting',
 ];
 
 export function cmdHelp() {

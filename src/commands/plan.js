@@ -1,10 +1,10 @@
 // plan - the spend planner. REAL routing (scan -> route) plus a cost model
-// computed from lane cost classes, not invented numbers. When Apertus is
+// computed from lane cost classes, not invented numbers. When a chat lane is
 // keyed it can draft the step list; otherwise the local scaffold plan is
 // used and labeled as such.
 import { buildRoster } from '../scan.js';
 import { assignRoles, explainRouting } from '../router.js';
-import { apertusAvailable, apertusChat } from '../apertus.js';
+import { chatLaneAvailable, chatLane } from '../chatlane.js';
 
 // rough per-role token estimates by task size (heuristic, labeled as such)
 const ROLE_TOKENS = { planner: 900, builder: 12000, critic: 1500, verifier: 700 };
@@ -73,21 +73,23 @@ export async function cmdPlan(args, flags) {
     else console.log(`  ${lane.name.padEnd(16)} untested - no gated history yet`);
   }
 
-  if (apertusAvailable()) {
+  const draftLane = roster.lanes.find((l) => chatLaneAvailable(l));
+  if (draftLane) {
     try {
-      const res = await apertusChat([
+      const res = await chatLane(draftLane, [
         { role: 'system', content: 'You are a planning assistant. Given a task brief, list at most 5 concrete, checkable steps. No preamble.' },
         { role: 'user', content: task },
-      ], { model: 'Apertus-8B', max_tokens: 500 });
-      console.log('\napertus-8b draft plan:');
+      ], { max_tokens: 500 });
+      console.log(`\n${draftLane.name} draft plan:`);
       console.log(res.text.replace(/^/gm, '  '));
       if (res.usage) console.log(`  (usage: ${res.usage.total_tokens ?? '?'} tokens)`);
     } catch (e) {
-      console.log(`\napertus draft failed (${e.message.split('\n')[0]}) - local scaffold only`);
+      console.log(`\n${draftLane.name} draft failed (${e.message.split('\n')[0]}) - local scaffold only`);
     }
   } else {
-    console.log('\napertus: not keyed - step drafting skipped (export APERTUS_API_KEY to enable)');
+    console.log('\nno keyed chat lane - step drafting skipped (any OpenAI-compatible env-keyed lane enables it)');
   }
+
   console.log(`\nnext: cadre go "${task}"`);
   return 0;
 }

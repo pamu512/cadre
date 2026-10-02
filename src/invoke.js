@@ -6,7 +6,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { chatLane } from './chatlane.js';
+import { chatLane, CHAT_KINDS } from './chatlane.js';
 
 const run = promisify(execFile);
 const AX = process.env.CADRE_AX || join(homedir(), '.local/bin/ax');
@@ -23,7 +23,7 @@ export async function invokeLane(lane, task, opts = {}) {
     const { stdout } = await run(AX, axArgs, { timeout: timeoutMs, maxBuffer: 1024 * 1024 * 32 });
     return { ok: true, kind, stdout };
   }
-  if (kind === 'apertus' || kind === 'openai-compatible' || kind === 'http-chat') {
+  if (CHAT_KINDS.includes(kind)) {
     // any OpenAI-compatible endpoint lane — provider-agnostic driver
     const result = await chatLane(
       lane,
@@ -50,7 +50,7 @@ export async function invokeLane(lane, task, opts = {}) {
     }
   }
   if (kind === 'http') {
-    throw new Error(`lane ${lane.name}: generic http invoke not configured (endpoint lanes need a driver; apertus has one)`);
+    throw new Error(`lane ${lane.name}: generic http invoke not configured (endpoint lanes need a driver; OpenAI-compatible ones have one)`);
   }
   throw new Error(`lane ${lane.name}: no invoke driver for talks=${lane.talks}`);
 }

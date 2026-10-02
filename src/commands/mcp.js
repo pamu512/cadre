@@ -38,7 +38,7 @@ const TOOLS = [
   },
   {
     name: 'cadre_meter',
-    description: 'Show real metered usage recorded so far (apertus call receipts from the audit log) and open runs.',
+    description: 'Show real metered usage recorded so far (chat-lane call receipts from the audit log) and open runs.',
     inputSchema: { type: 'object', properties: {} },
   },
 ];

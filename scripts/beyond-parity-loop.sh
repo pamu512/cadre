@@ -29,7 +29,7 @@ trap 'rm -f "$PIDFILE" "$HEARTBEAT"' EXIT
 heartbeat
 
 declare -a ITEMS=(
-  "B2: go --local standalone loop without ax: builder = user lanes (invoke kind command) or apertus if keyed; plan/critique local scaffold; verify+gate unchanged. Tests with a command-kind lane fixture. Stay in this repo."
+  "B2: go --local standalone loop without ax: builder = user lanes (invoke kind command) or a keyed chat lane; plan/critique local scaffold; verify+gate unchanged. Tests with a command-kind lane fixture. Stay in this repo."
   "B3: adapter breadth: detect gemini CLI in scan.js when present; add examples/lanes/generic-cli.json with a {brief} command template. Tests."
   "B4: map warmth: cache map index under CADRE_HOME/maps with mtime invalidation; go/plan consult hot zones as router hints. Tests with a fake cache."
   "B5: frugal pipes: compress builder output before run.log (collapse blank runs, cap 16KB head+tail, saved-bytes counter). Tests."

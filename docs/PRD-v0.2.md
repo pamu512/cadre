@@ -27,7 +27,7 @@ with a brief naming its item, gate must pass or the item reverts.
   `proof --verify` history, median bundle inspect time (log timestamps), sweep-recovery
   rate, metered-burn per passed run. Real numbers from the ledger only; "—" when absent.
 - **B2 — standalone loop (v0.1 §6.2 P1):** `go --local` runs plan/build/critique/verify
-  without ax: builder = user lanes (command kind) or apertus; ax becomes just another adapter.
+  without ax: builder = user lanes (command kind) or any keyed chat lane; ax becomes just another adapter.
 - **B3 — adapter breadth:** Gemini CLI detection in scan.js + a documented generic-CLI
   template lane (`examples/lanes/generic-cli.json` with `{brief}` command template).
 - **B4 — map warmth:** map index cached under $CADRE_HOME/maps with mtime invalidation;

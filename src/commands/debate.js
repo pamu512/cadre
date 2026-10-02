@@ -1,5 +1,5 @@
 // debate - two REAL lanes argue, transcripts cited. Uses ax lanes headless
-// (ax glm / ax grok verified working on this machine). If apertus is keyed it
+// (ax glm / ax grok verified working on this machine). If a chat lane is keyed it
 // joins as a third voice. Every claim printed cites a file on disk.
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -7,7 +7,8 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { home } from '../store.js';
-import { apertusAvailable, apertusChat } from '../apertus.js';
+import { chatLaneAvailable, chatLane } from '../chatlane.js';
+import { buildRoster } from '../scan.js';
 
 const run = promisify(execFile);
 const AX = process.env.CADRE_AX || join(homedir(), '.local/bin/ax');
@@ -71,22 +72,24 @@ export async function cmdDebate(args, flags) {
     console.log(stdout.trim().replace(/^/gm, '  '));
   }
 
-  let apertusNote = '';
-  if (apertusAvailable()) {
+  // optional third-party judge: any keyed OpenAI-compatible chat lane
+  const roster = await buildRoster();
+  const judgeLane = roster.lanes.find((l) => chatLaneAvailable(l));
+  if (judgeLane) {
     try {
-      const res = await apertusChat([
+      const res = await chatLane(judgeLane, [
         { role: 'system', content: 'You judge technical debates. In at most 5 lines, name the winner and why.' },
         { role: 'user', content: `Question: ${q}\n\nLane A:\n${opening.A.slice(0, 1500)}\n\nLane B:\n${opening.B.slice(0, 1500)}` },
-      ], { model: 'Apertus-70B', max_tokens: 300 });
-      apertusNote = res.text;
-      writeFileSync(join(dir, 'judge-apertus-70b.md'), res.text);
-      console.log('\n--- judge (apertus-70b) ---');
+      ], { max_tokens: 300 });
+      judgeNote = res.text;
+      writeFileSync(join(dir, `judge-${judgeLane.name}.md`), res.text);
+      console.log(`\n--- judge (${judgeLane.name}) ---`);
       console.log(res.text.replace(/^/gm, '  '));
     } catch (e) {
-      console.log(`\njudge: apertus failed (${e.message.split('\n')[0]}) - no judgment filed`);
+      console.log(`\njudge: ${judgeLane.name} failed (${e.message.split('\n')[0]}) - no judgment filed`);
     }
   } else {
-    console.log('\njudge: apertus not keyed - no judgment filed (export APERTUS_API_KEY to add one)');
+    console.log('\njudge: no keyed chat lane - no judgment filed');
   }
 
   writeFileSync(join(dir, 'question.txt'), q);

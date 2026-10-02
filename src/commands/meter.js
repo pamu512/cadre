@@ -6,7 +6,7 @@ import { loadMeters, usageFromAudit, pacing, renderMeters, saveMeters } from '..
 export async function cmdMeter(args, flags) {
   const meters = loadMeters();
 
-  // cadre meter --set lane=apertus-8b --provider nebius --quota 2000000 --reset 2026-10-08T00:00:00Z [--rail official]
+  // cadre meter --set lane=<name> --provider <provider> --quota 2000000 --reset 2026-10-08T00:00:00Z [--rail official]
   if (flags.set) {
     const m = String(flags.set);
     const quota = flags.quota ? Number(flags.quota) : null;
@@ -36,7 +36,7 @@ export async function cmdMeter(args, flags) {
   if (meters.length === 0 && usage.size === 0) {
     console.log('no entitlements declared and no usage recorded yet.');
     console.log('\ndeclare one (official rail — your dashboard numbers):');
-    console.log('  cadre meter --set lane=apertus-8b --provider nebius --quota 2000000 --reset 2026-10-08T00:00:00Z');
+    console.log('  cadre meter --set lane=<name> --provider <provider> --quota 2000000 --reset 2026-10-08T00:00:00Z');
     console.log('\nusage burns are recorded automatically from run receipts (audit.log).');
     return 0;
   }

@@ -1,12 +1,12 @@
 // chatlane - the generic OpenAI-compatible chat driver. ANY keyed endpoint lane
-// (apertus, openai, anthropic-compatible, glm, a user lane with invoke.env) is
+// (any provider: openai, anthropic-compatible, glm, a user lane with invoke.env) is
 // driven by this one code path. Cadre is model-agnostic: providers are data,
 // not code. The key is read from the lane's env var at call time, used in one
 // Authorization header, never logged or stored.
 import { request } from 'node:http';
 import { request as requestSecure } from 'node:https';
 
-export const CHAT_KINDS = ['apertus', 'openai-compatible', 'http-chat'];
+export const CHAT_KINDS = ['openai-compatible', 'http-chat', 'chat'];
 
 // resolve { key, url, model } for a lane. Precedence:
 //   invoke.api_key_env / invoke.base_url / invoke.model  (user lane JSON)

@@ -19,7 +19,7 @@ const ROLE_TAGS = {
 // Reasoning-lane preference is DATA, not code: role preference order comes from
 // $CADRE_HOME/reasoning.json (or sensible tag-based fallback), never hardcoded
 // provider names. Cadre is model-agnostic; any keyed chat lane can serve any role.
-//   {"planner": ["apertus-8b", "glm"], "critic": ["apertus-70b"]}
+//   {"planner": ["my-8b-lane", "glm"], "critic": ["my-70b-lane"]}
 const PREFERRED = loadPreferred();
 function loadPreferred() {
   const p = process.env.CADRE_REASONING_PREFS || join(process.env.CADRE_HOME || join(homedir(), '.cadre'), 'reasoning.json');

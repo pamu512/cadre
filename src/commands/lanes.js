@@ -3,7 +3,6 @@
 // servers, user-declared lanes in $CADRE_HOME/lanes - all validated against
 // the contract. Nothing here is hardcoded.
 import { buildRoster } from '../scan.js';
-import { apertusAvailable } from '../apertus.js';
 
 export async function cmdLanes(flags) {
   const roster = await buildRoster();
@@ -14,7 +13,6 @@ export async function cmdLanes(flags) {
       lanes,
       clis: roster.clis.map((c) => c.label),
       platform: roster.platform,
-      apertus: apertusAvailable() ? 'keyed' : 'not-keyed',
     }, null, 2));
     return 0;
   }
@@ -34,7 +32,7 @@ export async function cmdLanes(flags) {
     );
   }
   const clis = roster.clis.map((c) => c.label).join(', ');
-  console.log(`\n${lanes.length} lane${lanes.length === 1 ? '' : 's'} · clis: ${clis || 'none'} · ${roster.platform} · apertus: ${apertusAvailable() ? 'keyed (APERTUS_API_KEY set)' : 'not keyed'}`);
+  console.log(`\n${lanes.length} lane${lanes.length === 1 ? '' : 's'} · clis: ${clis || 'none'} · ${roster.platform}`);
   console.log('contract: schemas/lane.schema.json · declare lanes in $CADRE_HOME/lanes/*.json');
   return 0;
 }

@@ -25,8 +25,6 @@ const CLI_PROBES = [
 
 // env-keyed API lanes. Key NAMES only - values are never read, logged, or stored.
 const API_LANES = [
-  { lane: 'apertus-8b',  env: 'APERTUS_API_KEY',      endpoint: 'https://api.apertus.ai/v1/chat/completions', model: 'Apertus-8B',  good_at: ['reasoning', 'drafting', 'classification'], cost: 'metered', identity: 'apertus-class' },
-  { lane: 'apertus-70b', env: 'APERTUS_API_KEY',      endpoint: 'https://api.apertus.ai/v1/chat/completions', model: 'Apertus-70B', good_at: ['decisions', 'review', 'long-reasoning'], cost: 'metered', identity: 'apertus-class' },
   { lane: 'openai',      env: 'OPENAI_API_KEY',       endpoint: 'https://api.openai.com/v1/chat/completions',  model: 'gpt-4o-mini', good_at: ['general', 'critique'],   cost: 'metered' },
   { lane: 'anthropic',   env: 'ANTHROPIC_API_KEY',    endpoint: 'https://api.anthropic.com/v1/messages',       model: 'claude-sonnet-4', good_at: ['review', 'prose'], cost: 'metered' },
   { lane: 'glm',         env: 'GLM_API_KEY',          endpoint: 'https://api.z.ai/api/paas/v4/chat/completions', model: 'glm-4.7', good_at: ['reasoning', 'prose'], cost: 'metered' },
