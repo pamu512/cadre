@@ -86,6 +86,8 @@ export function runBehaviorCheck(behavior, cwd, { testCmd = null, refPath = null
   // 3. keyword check: distinctive keywords co-occur in a source line.
   // CIRCULARITY GUARD: the reference document itself is excluded - a keyword
   // hit inside the spec proves nothing about the implementation.
+  // RARITY WEIGHTING: implementation keywords (identifiers, paths, flags)
+  // carry the check; prose words alone never close a behavior.
   const kws = keywords(text);
   if (kws.length < 2) return { closed: false, kind: 'keyword', reason: 'behavior too generic to check deterministically (no distinctive keywords)' };
   let files = walkFiles(cwd);
@@ -93,17 +95,31 @@ export function runBehaviorCheck(behavior, cwd, { testCmd = null, refPath = null
     const absRef = refPath.startsWith('/') ? refPath : join(cwd, refPath);
     files = files.filter((f) => f !== absRef);
   }
+  // IDF-style rarity: pass 1 counts in how many files each keyword occurs.
+  // A keyword found in <=2 files is RARE - one hit on a line is real evidence.
+  // A keyword everywhere (test, export, function) proves nothing alone.
+  const fileCount = new Map(kws.map((k) => [k, 0]));
+  const fileTexts = [];
   for (const f of files) {
-    let lines;
-    try { lines = readFileSync(f, 'utf-8').split('\n'); } catch { continue; }
+    let t;
+    try { t = readFileSync(f, 'utf-8').toLowerCase(); } catch { continue; }
+    fileTexts.push([f, t]);
+    for (const k of kws) if (t.includes(k)) fileCount.set(k, fileCount.get(k) + 1);
+  }
+  const rare = (k) => fileCount.get(k) <= 2 && k.length >= 5;
+  for (const [f, t] of fileTexts) {
+    const lines = t.split('\n');
     for (let i = 0; i < lines.length; i++) {
-      const low = lines[i].toLowerCase();
+      const low = lines[i];
       const hits = kws.filter((k) => low.includes(k));
-      // co-occurrence bar: at least 2 distinctive keywords, or all of them (>3)
-      const need = kws.length > 3 ? Math.ceil(kws.length * 0.75) : 2;
-      if (hits.length >= Math.min(need, kws.length)) {
+      if (hits.length === 0) continue;
+      const rareHits = hits.filter(rare);
+      const ok = rareHits.length >= 1 && hits.length >= Math.max(2, Math.ceil(kws.length * 0.5))
+        ? true
+        : hits.length >= Math.ceil(kws.length * 0.75);
+      if (ok) {
         const rel = f.startsWith(cwd) ? f.slice(cwd.length + 1) : f;
-        return { closed: true, kind: 'keyword', citation: `${rel}:${i + 1}`, reason: `keywords co-occur: ${hits.join(', ')}` };
+        return { closed: true, kind: 'keyword', citation: `${rel}:${i + 1}`, reason: `keywords co-occur: ${hits.join(', ')}${rareHits.length ? ' (rare: ' + rareHits.join(', ') + ')' : ''}` };
       }
     }
   }

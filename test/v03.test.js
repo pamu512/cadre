@@ -377,16 +377,16 @@ test('go: early-aborted runs still carry the usage rollup', { timeout: 120000 },
 
 test('parity --verify: behavior-closing executor with citations; ref excluded (no circularity)', async () => {
   const { runBehaviorCheck, keywords, mentionedPaths } = await import(join(ROOT, 'src/behaviorcheck.js'));
-  // file check: named path exists
-  const f = runBehaviorCheck('provide docs/README.md with usage', ROOT, { refPath: null });
-  assert.ok(f.closed && f.kind === 'file' && f.citation === 'docs/README.md', 'file check closes with path cite');
+  // file check: named path exists (a file this repo really has)
+  const f = runBehaviorCheck('provide schemas/lane.schema.json with the contract', ROOT, { refPath: null });
+  assert.ok(f.closed && f.kind === 'file' && f.citation === 'schemas/lane.schema.json', 'file check closes with path cite');
   // file check: missing path stays open honestly
   const f2 = runBehaviorCheck('provide docs/NOPE.md with usage', ROOT, { refPath: null });
   assert.ok(!f2.closed && /missing/.test(f2.reason));
   // keyword check with ref EXCLUDED: the spec doc itself must not satisfy it
   const proj = mkdtempSync(join(tmpdir(), 'beh-'));
   writeFileSync(join(proj, 'SPEC.md'), 'the zebraconfig module must exist somewhere\n');
-  writeFileSync(join(proj, 'impl.js'), 'export const zebraconfig = 1;\n');
+  writeFileSync(join(proj, 'impl.js'), 'export const zebraconfig = 1; // module exists\n');
   const hit = runBehaviorCheck('the zebraconfig module must exist somewhere', proj, { refPath: 'SPEC.md' });
   assert.ok(hit.closed && hit.citation === 'impl.js:1', 'citation must point at the implementation, not the ref: ' + hit.citation);
   // and with only the ref containing the words, it must NOT close
