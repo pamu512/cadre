@@ -593,3 +593,30 @@ test('meters: rateGuard sliding window enforces rpm', { timeout: 30000 }, async 
   assert.equal(results.filter(Boolean).length, 2, 'only rpm ceiling passes immediately');
   assert.ok(results.slice(2).includes(false), 'beyond ceiling refused');
 });
+
+test('meters: entitlement shapes + provider grouping + router consumption', async () => {
+  const { pacing, entitlementShape } = await import(join(ROOT, 'src/meters.js'));
+  // recurring window rolls forward
+  const past = new Date(Date.now() - 26 * 3600e3).toISOString(); // reset was yesterday
+  const w = pacing({ quota: 1000, resetAt: past, used: 950, windowHours: 5 });
+  assert.equal(w.state, 'pacing'); // 5% left - unambiguous, off the 10% boundary
+  // rollover extends availability and appears in the note
+  const r = pacing({ quota: 1000, resetAt: new Date(Date.now() + 86400e3).toISOString(), used: 980, rollover: 500 });
+  assert.equal(r.state, 'ok', 'rollover keeps the lane usable past quota');
+  assert.ok(r.note.includes('rollover'), 'rollover stated');
+  // shapes
+  assert.equal(entitlementShape({ queued: true }), 'unlimited-queued');
+  assert.equal(entitlementShape({ window_hours: 5, quota_tokens: 1 }), 'window');
+  assert.equal(entitlementShape({ rpm: 50 }), 'rate-limited');
+  assert.equal(entitlementShape({ quota_tokens: 1, reset_at: 'x' }), 'monthly');
+  assert.equal(entitlementShape({ quota_tokens: 1, rollover_tokens: 2, reset_at: 'x' }), 'rollover');
+  assert.equal(entitlementShape(null), 'undeclared');
+  // router consumes entitlements: empty demotes hard
+  const { scoreLane } = await import(join(ROOT, 'src/router.js'));
+  const lane = { name: 'L', good_at: ['edits', 'tests'], cost: 'plan', invoke: {} };
+  const ents = { byLane: new Map([['L', { state: 'empty', shape: 'monthly', provider: 'p' }]]) };
+  const demoted = scoreLane(lane, 'builder', null, ents);
+  const neutral = scoreLane(lane, 'builder', null, null);
+  assert.ok(demoted.fit <= neutral.fit - 6, 'empty entitlement demotes by 6');
+  assert.ok(demoted.why.includes('entitlement empty (monthly)'));
+});

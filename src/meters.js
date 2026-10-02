@@ -36,18 +36,26 @@ export function usageFromAudit() {
   return per;
 }
 
-// pacing: given quota Q, window reset R (Date), usage U so far -> verdict
-export function pacing({ quota, resetAt, used }) {
-  if (quota == null || resetAt == null) return { state: 'unknown', note: 'quota or reset unknown — "—"' };
+// pacing: quota Q, window reset R, usage U -> verdict. Entitlement-aware:
+//   - rollover credits burn AFTER the window quota (metered cents wait longer)
+//   - recurring windows (window_hours) roll the reset forward while it's past
+//   - the effective denominator includes rollover so % is honest
+export function pacing({ quota, resetAt, used, rollover = 0, windowHours = null }) {
+  if (quota == null && !rollover) return { state: 'unknown', note: 'quota or reset unknown — "—"' };
   const now = Date.now();
-  const reset = new Date(resetAt).getTime();
-  if (Number.isNaN(reset)) return { state: 'unknown', note: 'bad reset date' };
-  const left = quota - (used || 0);
+  let reset = resetAt ? new Date(resetAt).getTime() : NaN;
+  if (Number.isNaN(reset) && !windowHours) return { state: 'unknown', note: 'bad reset date' };
+  // recurring window: if the declared reset is already past, roll it forward
+  if (Number.isFinite(reset) && windowHours && reset <= now) {
+    while (reset <= now) reset += windowHours * 3.6e6;
+  }
+  const totalAvail = (quota || 0) + (rollover || 0);
+  const left = totalAvail - (used || 0);
   if (left <= 0) return { state: 'empty', note: 'exhausted — downshift or park metered behind the budget gate' };
-  const hoursLeft = Math.max(0.1, (reset - now) / 3.6e6);
-  const pct = left / quota;
-  if (pct < 0.1) return { state: 'pacing', note: `${pct.toLocaleString(undefined, { style: 'percent' })} left, ${hoursLeft.toFixed(1)}h to reset — pace it` };
-  return { state: 'ok', note: `${pct.toLocaleString(undefined, { style: 'percent' })} of quota left` };
+  const hoursLeft = Number.isFinite(reset) ? Math.max(0.1, (reset - now) / 3.6e6) : null;
+  const pct = left / totalAvail;
+  if (pct < 0.1) return { state: 'pacing', note: `${pct.toLocaleString(undefined, { style: 'percent' })} left${hoursLeft != null ? `, ${hoursLeft.toFixed(1)}h to reset` : ''} — pace it` };
+  return { state: 'ok', note: `${pct.toLocaleString(undefined, { style: 'percent' })} of quota left${rollover ? ` (+${rollover.toLocaleString()} rollover)` : ''}` };
 }
 
 // included-first ordering (PRD 6.4): plan/free lanes before metered
@@ -171,4 +179,43 @@ export async function rateGuard(laneName, { rpm = null, rps = null, maxWaitMs = 
   if (!Number.isFinite(waitMs) || waitMs <= 0 || waitMs > maxWaitMs) return false;
   await new Promise((r) => setTimeout(r, Math.ceil(waitMs)));
   return rateGuard(laneName, { rpm, rps, maxWaitMs: 0 }); // one retry, no further wait
+}
+
+// ---- entitlement view: what the router reads ----------------------------------
+// One snapshot per lane: pacing verdict + entitlement shape. Shapes:
+//   unlimited-queued : no quota, but requests may queue (latency, not cost)
+//   window           : recurring window_hours with a quota (e.g. 5h windows)
+//   monthly          : calendar quota + reset_at
+//   rollover         : monthly + rollover_tokens that burn after quota
+//   rate-limited     : rpm/rps ceilings (hard)
+export function entitlementShape(m) {
+  if (!m) return 'undeclared';
+  if (m.rpm || m.rps) return 'rate-limited';
+  if (m.rollover_tokens) return 'rollover';
+  if (m.window_hours) return 'window';
+  if (m.quota_tokens != null && m.reset_at) return 'monthly';
+  if (m.queued) return 'unlimited-queued';
+  return 'declared-partial';
+}
+
+// The router's meter input: per-lane { state, shape, left } + provider grouping.
+// Lanes with no meter are 'undeclared' (routed by cost class alone).
+export function entitlementView(laneNames, { usage } = {}) {
+  const meters = loadMeters();
+  const byLane = new Map();
+  for (const name of laneNames) {
+    const m = meters.find((x) => x.lane === name) || null;
+    const p = m ? pacing({
+      quota: m.quota_tokens, resetAt: m.reset_at,
+      used: usage?.get(name)?.tokens || 0,
+      rollover: m.rollover_tokens || 0, windowHours: m.window_hours || null,
+    }) : { state: 'undeclared', note: 'no meter declared' };
+    byLane.set(name, { state: p.state, note: p.note, shape: entitlementShape(m), provider: m?.provider || null });
+  }
+  const byProvider = {};
+  for (const [name, v] of byLane) {
+    const key = v.provider || '(undeclared)';
+    (byProvider[key] ||= []).push({ lane: name, ...v });
+  }
+  return { byLane, byProvider };
 }

@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { loadPins, listRuns } from './store.js';
 import { classifyTask, costPolicyFor } from './taskclass.js';
+import { entitlementView, usageFromAudit } from './meters.js';
 
 export const ROLES = ['planner', 'builder', 'critic', 'verifier'];
 
@@ -75,7 +76,7 @@ export function historyPenalty(lane, injectedHistory = null) {
   return 4; // struggling
 }
 
-export function scoreLane(lane, role, taskClass = null) {
+export function scoreLane(lane, role, taskClass = null, entitlements = null) {
   const tags = lane.good_at || [];
   const wanted = ROLE_TAGS[role] || [];
   let overlap = tags.filter((t) => wanted.includes(t)).length;
@@ -84,6 +85,19 @@ export function scoreLane(lane, role, taskClass = null) {
   const prefBonus = preferred > -1 ? 3 - Math.min(preferred, 2) : 0;
   const penalty = availabilityPenalty(lane);
   const histPenalty = historyPenalty(lane);
+  // THE ROUTER READS ENTITLEMENTS: meter state moves the score at route time.
+  //   empty  -> hard demotion (a spent lane loses to everything declared ok)
+  //   pacing -> mild demotion (works, but the meter says pace it)
+  //   unlimited-queued -> treated as plan-grade (latency, not cost)
+  let entAdj = 0;
+  let entNote = null;
+  const ent = entitlements?.byLane?.get(lane.name);
+  if (ent) {
+    if (ent.state === 'empty') { entAdj = -6; entNote = `entitlement empty (${ent.shape})`; }
+    else if (ent.state === 'pacing') { entAdj = -2; entNote = `entitlement pacing (${ent.shape})`; }
+    else if (ent.state === 'ok' && ent.shape !== 'undeclared') { entAdj = 1; entNote = `entitlement ok (${ent.shape})`; }
+    else if (ent.shape === 'unlimited-queued') { entAdj = 1; entNote = 'unlimited-but-queued (latency, not cost)'; }
+  }
   // task-class policy (the bench's contract): deterministic work gets cheap/
   // local preference, judgment work gets frontier preference. Stated, not
   // silent: the why line names the policy that moved the score.
@@ -94,7 +108,7 @@ export function scoreLane(lane, role, taskClass = null) {
   else if (policy === 'free-first' && lane.cost === 'metered') { classAdj = -2; classNote = 'task deterministic · metered penalized'; }
   else if (policy === 'capability-first' && (lane.cost === 'metered' || lane.cost === 'plan')) { classAdj = 2; classNote = 'task judgment · frontier preferred'; }
   else if (policy === 'capability-first' && lane.cost === 'free') { classAdj = -1; classNote = 'task judgment · free lane discounted'; }
-  const fit = overlap * 2 + prefBonus - penalty - histPenalty + classAdj;
+  const fit = overlap * 2 + prefBonus - penalty - histPenalty + classAdj + entAdj;
   const h = laneHistory().get(lane.name);
   const why = [
     `good_at ∩ ${role}: ${overlap}`,
@@ -103,6 +117,7 @@ export function scoreLane(lane, role, taskClass = null) {
     penalty ? `status ${lane.invoke?.status}` : null,
     histPenalty ? `history ${h.passed}/${h.runs} passed` : null,
     classNote,
+    entNote,
   ].filter(Boolean).join(' · ');
   return { role, lane: lane.name, fit, costRank: COST_RANK[lane.cost] ?? 3, why };
 }
@@ -114,6 +129,13 @@ export function assignRoles(roster, { brief = '' } = {}) {
   const used = new Set();
   const task = classifyTask(brief);
   assignments.taskClass = task; // surfaced by explainRouting
+  // entitlement snapshot: the router SEES every declared meter, per lane,
+  // grouped per provider (available for display and scoring)
+  let entitlements = null;
+  try {
+    entitlements = entitlementView(roster.lanes.map((l) => l.name), { usage: usageFromAudit() });
+    assignments.entitlements = entitlements; // explainRouting/plan can render it
+  } catch { /* meters best-effort; undeclared lanes route by cost class */ }
 
   for (const role of ROLES) {
     const pinned = pins.roles?.[role];
@@ -127,7 +149,7 @@ export function assignRoles(roster, { brief = '' } = {}) {
     if (assignments.some((a) => a.role === role)) continue;
     const scored = roster.lanes
       .filter((l) => !used.has(l.name))
-      .map((l) => scoreLane(l, role, task))
+      .map((l) => scoreLane(l, role, task, entitlements))
       .filter((s) => s.fit > 0)
       .sort((a, b) => b.fit - a.fit || a.costRank - b.costRank); // fit first, cost only breaks ties
     if (scored.length === 0) {

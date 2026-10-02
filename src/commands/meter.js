@@ -30,6 +30,8 @@ export async function cmdMeter(args, flags) {
       rollover_tokens: flags.rollover ? Number(flags.rollover) : null,
       rpm: flags.rpm ? Number(flags.rpm) : null,   // requests/min ceiling (rate-limit meter)
       rps: flags.rps ? Number(flags.rps) : null,   // requests/sec ceiling
+      window_hours: flags['window-hours'] ? Number(flags['window-hours']) : null, // recurring window (e.g. 5h)
+      queued: Boolean(flags.queued),               // unlimited-but-queued entitlement
       rail: flags.rail || 'official', // official = read off your provider dashboard; header = flagged fallback
       updated: new Date().toISOString(),
     };
