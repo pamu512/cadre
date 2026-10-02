@@ -74,6 +74,7 @@ function walkFiles(cwd, limit = 3000) {
 // Run ONE behavior's check against the tree. Returns:
 //   { closed, kind, citation?, reason }
 export function runBehaviorCheck(behavior, cwd, opts = {}) {
+  const { refPath = null } = opts;
   const text = String(behavior || '');
 
   // 1. file check: every path the behavior names exists
