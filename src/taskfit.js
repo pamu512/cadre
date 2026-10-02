@@ -67,16 +67,16 @@ export function rankForTask(roster, brief) {
       if (s) h = h ? { runs: h.runs + s.runs, passed: h.passed + s.passed, tokens: h.tokens + s.tokens } : s;
     }
     const passRate = h && h.runs ? h.passed / h.runs : null;
+    // cost is a tiebreak, not a capability: free ≠ better
     const score =
       overlap * 2 +
-      (passRate == null ? 0 : passRate * 6) +
-      (4 - (COST[lane.cost] ?? 3)) -
+      (passRate == null ? 0 : passRate * 6) -
       (lane.invoke?.status && !['ok', 'ready'].includes(lane.invoke.status) ? 5 : 0);
     const why = [
       overlap ? `capability match ${overlap}` : 'no capability overlap',
       passRate == null ? 'untested for this class' : `history ${Math.round(passRate * 100)}% over ${h.runs} run(s)`,
       `cost ${lane.cost}`,
     ].join(' · ');
-    return { lane: lane.name, cost: lane.cost, score, passRate, runs: h?.runs || 0, why };
-  }).sort((a, b) => b.score - a.score);
+    return { lane: lane.name, cost: lane.cost, costRank: COST[lane.cost] ?? 3, score, passRate, runs: h?.runs || 0, why };
+  }).sort((a, b) => b.score - a.score || a.costRank - b.costRank);
 }

@@ -174,3 +174,18 @@ test('router: demonstrated failure outranks free cost', async () => {
   const working = { name: 'nonexistent-lane-xyz', good_at: ['edits'], cost: 'plan', invoke: {} };
   assert.equal(historyPenalty(working), 0, 'no history = no penalty');
 });
+
+// ---- cost-is-tiebreak-only ----------------------------------------------------
+test('router: cost never adds capability points (free != better)', async () => {
+  const { scoreLane } = await import(join(ROOT, 'src/router.js'));
+  const free = scoreLane({ name: 'f', good_at: ['edits', 'tests'], cost: 'free', invoke: {} }, 'builder');
+  const plan = scoreLane({ name: 'p', good_at: ['edits', 'tests'], cost: 'plan', invoke: {} }, 'builder');
+  assert.equal(free.fit, plan.fit, 'equal capability must score equally regardless of cost');
+  assert.ok(free.costRank < plan.costRank, 'costRank only breaks ties');
+});
+
+test('router: last-resort - all capable lanes failing still fields a crew, with warning', async () => {
+  const src = readFileSync(join(ROOT, 'src/router.js'), 'utf-8');
+  assert.ok(src.includes('ALL capable lanes failing'), 'fallback must exist');
+  assert.ok(src.includes('b.fit - a.fit || a.costRank - b.costRank'), 'sort must tiebreak by cost, not weight it');
+});

@@ -1,8 +1,10 @@
 // router - roles go to whoever fits, not whoever's loyal.
 // Deterministic, explainable fit scoring over the roster + pins. No black box.
-// Scoring order (deliberate): demonstrated failure > capability > economics.
-//   A lane that keeps failing runs loses to a costlier lane that works —
-//   "free" is only free if the run passes the gate.
+// Scoring order (deliberate): demonstrated failure > capability > (economics
+//   as tiebreak only). Free is not better: a small local model that fails the
+//   gate costs more than a plan lane that passes. Cost never adds capability
+//   points; it only breaks ties between equally-fit lanes (spend policy lives
+//   in the fallback chains, not here).
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -79,10 +81,9 @@ export function scoreLane(lane, role) {
   if (overlap === 0) return { role, lane: lane.name, fit: 0, why: 'no overlap' };
   const preferred = (PREFERRED.get(role) || []).indexOf(lane.name);
   const prefBonus = preferred > -1 ? 3 - Math.min(preferred, 2) : 0;
-  const costRank = COST_RANK[lane.cost] ?? 3;
   const penalty = availabilityPenalty(lane);
   const histPenalty = historyPenalty(lane);
-  const fit = overlap * 2 + prefBonus + (4 - costRank) - penalty - histPenalty;
+  const fit = overlap * 2 + prefBonus - penalty - histPenalty;
   const h = laneHistory().get(lane.name);
   const why = [
     `good_at ∩ ${role}: ${overlap}`,
@@ -91,7 +92,7 @@ export function scoreLane(lane, role) {
     penalty ? `status ${lane.invoke?.status}` : null,
     histPenalty ? `history ${h.passed}/${h.runs} passed` : null,
   ].filter(Boolean).join(' · ');
-  return { role, lane: lane.name, fit, why };
+  return { role, lane: lane.name, fit, costRank: COST_RANK[lane.cost] ?? 3, why };
 }
 
 // Assign every role from the roster. Pins override; remaining roles go by score.
@@ -114,9 +115,19 @@ export function assignRoles(roster, { brief = '' } = {}) {
       .filter((l) => !used.has(l.name))
       .map((l) => scoreLane(l, role))
       .filter((s) => s.fit > 0)
-      .sort((a, b) => b.fit - a.fit);
+      .sort((a, b) => b.fit - a.fit || a.costRank - b.costRank); // fit first, cost only breaks ties
     if (scored.length === 0) {
-      assignments.push({ role, lane: null, why: 'no lane fits - roster too thin', fit: 0 });
+      // last resort: everyone capable is failing on history. Take the best
+      // history-penalized lane anyway (capability > nothing) and WARN.
+      const capable = roster.lanes
+        .filter((l) => !used.has(l.name) && (l.good_at || []).some((t) => (ROLE_TAGS[role] || []).includes(t)))
+        .sort((a, b) => historyPenalty(a) - historyPenalty(b) || (COST_RANK[a.cost] ?? 3) - (COST_RANK[b.cost] ?? 3));
+      if (capable.length === 0) {
+        assignments.push({ role, lane: null, why: 'no lane fits - roster too thin', fit: 0 });
+        continue;
+      }
+      assignments.push({ role, lane: capable[0].name, why: 'ALL capable lanes failing on history - best available, expect gate scrutiny', fit: 0 });
+      used.add(capable[0].name);
       continue;
     }
     assignments.push(scored[0]);
