@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -290,4 +290,27 @@ test('rules critic: all four roles fire unconditionally - rules tier fires when 
   // smell detection still works
   assert.ok(renderCriticRules(r1).includes('CLEAN'));
   assert.ok(!renderCriticRules(r2).includes('CLEAN'));
+});
+
+test('go: proof re-verifies from the run record alone (meta.cwd durability)', { timeout: 120000 }, async () => {
+  const h = home('durable');
+  // a builder lane must exist in the sandbox home or go has no driver
+  mkdirSync(join(h.dir, 'lanes'), { recursive: true });
+  writeFileSync(join(h.dir, 'lanes', 'file-writer.json'), JSON.stringify({
+    name: 'file-writer', good_at: ['create', 'write', 'fixtures'], cost: 'free', talks: 'terminal', proves: 'commands',
+    invoke: { kind: 'command', command: `/bin/sh ${join(ROOT, 'scripts/fixture-writer.sh')} {brief}` },
+  }));
+  const proj = mkdtempSync(join(tmpdir(), 'durable-'));
+  // the verifier needs a detectable project test command
+  writeFileSync(join(proj, 'package.json'), JSON.stringify({ name: 'durable-proj', scripts: { test: 'node -e "process.exit(0)"' } }));
+  const r1 = await cli(h, 'go', 'create proof-durable.txt containing the single line: yes', '--cwd', proj);
+  assert.equal(r1.rc, 0, 'run must succeed');
+  const runs = readdirSync(join(h.dir, 'runs')).sort();
+  const id = runs[runs.length - 1];
+  const rec = JSON.parse(readFileSync(join(h.dir, 'runs', id, 'run.json'), 'utf-8'));
+  assert.ok(rec.meta?.cwd, 'run record must carry its cwd');
+  assert.equal(rec.meta.cwd, proj);
+  // proof from a DIFFERENT cwd must still resolve relative artifact paths
+  const r2 = await cli(h, 'proof', id);
+  assert.ok(r2.stdout.includes('gate: PROVEN') || r2.stdout.includes('passed'), 'proof passes from anywhere');
 });

@@ -133,7 +133,7 @@ export async function cmdGo(args, flags, { cwd = process.cwd() } = {}) {
   const record = createRun({
     brief, kind: 'go',
     roles: Object.fromEntries(routing.assignments.map((a) => [a.role, a.lane])),
-    meta: { scope: manifest },
+    meta: { scope: manifest, cwd },
   });
   acquireLock(record.id, { brief });
   globalThis.CADRE_ACTIVE_RUN = record.id;
@@ -307,70 +307,17 @@ meteredTokens += (res.usage?.total_tokens || 0);
     return 1;
   }
 
-  // rules critic inputs: evidence kinds collected so far
-  evidenceKindsForCritic = (readRun(record.id)?.evidence || []).map((e) => e.kind);
-  // ---- 3. critique ----------------------------------------------------------
-  console.log('\n── critique ─────────────────────────');
-  const critic = byRole.critic;
-  if (critic && chatLaneAvailable(critic) && underBudget()) {
-    try {
-      const res = await chatLane(critic, [
-        { role: 'system', content: 'You are the critic of a coding cadre. Review the builder output below against the brief. List concrete findings with file references where possible. If nothing is wrong, say CLEAN.' },
-        { role: 'user', content: `Brief: ${brief}\n\nBuilder output (tail):\n${buildOutput.slice(-4000)}` },
-      ], { max_tokens: 600 });
-      meteredTokens += (res.usage?.total_tokens || 0);
-      auditCall(record.id, critic.name, res);
-      await addEvidence(record.id, { kind: 'citation', label: `critic (${critic.name}) review`, ref: `runs/${record.id}/run.log#critique` });
-      console.log(`critic · ${critic.name}:`);
-      console.log(res.text.replace(/^/gm, '  '));
-      appendLog(record.id, `CRITIQUE (${critic.name}):\n${res.text}`);
-    } catch (e) {
-      console.log(`critic · skipped (${e.message.split('\n')[0]})`);
-      appendLog(record.id, `CRITIQUE skipped: ${e.message.slice(0, 500)}`);
-    }
-  } else {
-    // deterministic rules critic ALWAYS fires when no chat lane exists - the
-    // critic role is unconditional; the tier is honestly labeled
-    try {
-      const { criticRules, renderCriticRules } = await import('../rulescritic.js');
-      const changed = (changedFilesList || []).map((c) => c.file);
-      const rr = criticRules({ brief, changed, diffsText: diffsTextForCritic || '', manifest: scopeManifest, evidenceKinds: evidenceKindsForCritic || [] });
-      console.log(`critic · rules tier (no chat lane on this machine):`);
-      console.log(renderCriticRules(rr).replace(/^/gm, '  ') || '  (no findings)');
-      appendLog(record.id, `CRITIQUE (rules tier):\n${renderCriticRules(rr)}`);
-      await addEvidence(record.id, { kind: 'citation', label: 'critic (rules tier) review', ref: `runs/${record.id}/run.log#critique` });
-      if (rr.findings.some((f) => f.severity === 'high')) {
-        appendLog(record.id, 'CRITIQUE rules tier: HIGH findings present - see above');
-      }
-    } catch (e) {
-      console.log(`critic · rules tier failed (${e.message.split('\n')[0]}) - recorded`);
-      appendLog(record.id, `CRITIQUE rules tier failed: ${e.message.slice(0, 300)}`);
-    }
-  }
 
-  // ---- 4. verify ------------------------------------------------------------
-  console.log('\n── verify ───────────────────────────');
-  const test = detectTestCommand(cwd);
-  let verifyEv = null;
-  if (test) {
-    try {
-      const { stdout } = await run(test.cmd, test.args, { cwd, timeout: 1000 * 60 * 10, maxBuffer: 1024 * 1024 * 16 });
-      verifyEv = { kind: 'command', label: test.label, by: 'verifier', command: `${test.cmd} ${test.args.join(' ')}`, argv: [test.cmd, ...test.args], exit: 0, output: stdout.slice(0, 4000) };
-      console.log(`verifier · ${test.label} ✓`);
-      appendLog(record.id, `VERIFY ${test.label} exit 0:\n${stdout.slice(0, 4000)}`);
-    } catch (e) {
-      verifyEv = { kind: 'command', label: test.label, by: 'verifier', command: `${test.cmd} ${test.args.join(' ')}`, argv: [test.cmd, ...test.args], exit: e.code ?? 1, output: String(e.stdout || e.message).slice(0, 4000) };
-      console.error(`verifier · ${test.label} ✗ (exit ${e.code ?? 1})`);
-      appendLog(record.id, `VERIFY ${test.label} FAILED:\n${String(e.stdout || e.message).slice(0, 4000)}`);
-    }
-    await addEvidence(record.id, verifyEv);
-  } else {
-    console.log('verifier · no project test command detected (package.json/Makefile/Cargo.toml/pyproject.toml)');
-    appendLog(record.id, 'VERIFY skipped: no test command detected');
-  }
+  // artifact: the run's own log is always filed
+  await addEvidence(record.id, { kind: 'artifact', label: `runs/${record.id}/run.log`, path: join(home(), 'runs', record.id, 'run.log') });
 
-  // diff evidence from git — or from an fs snapshot when the project isn't a repo
+  // the run's own log is always a followable citation (citations family)
+  await addEvidence(record.id, { kind: 'citation', label: 'run log (verifier-attributed)', ref: `runs/${record.id}/run.log`, by: 'verifier' });
+
+  // ---- post-build state (captured BEFORE verify: test-runner output files
+  // are never harvested as the run's work, and the critic sees real diffs)
   const after = await gitState(cwd);
+  // diff evidence from git — or from an fs snapshot when the project isn't a repo
   if (!before && !after && globalThis.CADRE_FS_SNAPSHOT) {
     const afterSnap = fsSnapshot(cwd);
     const changed = fsDiff(globalThis.CADRE_FS_SNAPSHOT, afterSnap);
@@ -409,11 +356,78 @@ meteredTokens += (res.usage?.total_tokens || 0);
     }
   }
 
-  // artifact: the run's own log is always filed
-  await addEvidence(record.id, { kind: 'artifact', label: `runs/${record.id}/run.log`, path: join(home(), 'runs', record.id, 'run.log') });
 
-  // the run's own log is always a followable citation (citations family)
-  await addEvidence(record.id, { kind: 'citation', label: 'run log (verifier-attributed)', ref: `runs/${record.id}/run.log`, by: 'verifier' });
+  // rules critic inputs: evidence kinds collected so far
+  evidenceKindsForCritic = (readRun(record.id)?.evidence || []).map((e) => e.kind);
+
+  // ---- 3+4. critique ∥ verify ------------------------------------------------
+  // independent readers of the built tree: run in parallel, one stream shows both
+  console.log('\n── critique ∥ verify (parallel) ─────');
+  const critiqueTask = (async () => {
+  console.log('\n── critique ─────────────────────────');
+  const critic = byRole.critic;
+  if (critic && chatLaneAvailable(critic) && underBudget()) {
+    try {
+      const res = await chatLane(critic, [
+        { role: 'system', content: 'You are the critic of a coding cadre. Review the builder output below against the brief. List concrete findings with file references where possible. If nothing is wrong, say CLEAN.' },
+        { role: 'user', content: `Brief: ${brief}\n\nBuilder output (tail):\n${buildOutput.slice(-4000)}` },
+      ], { max_tokens: 600 });
+      meteredTokens += (res.usage?.total_tokens || 0);
+      auditCall(record.id, critic.name, res);
+      await addEvidence(record.id, { kind: 'citation', label: `critic (${critic.name}) review`, ref: `runs/${record.id}/run.log#critique` });
+      console.log(`critic · ${critic.name}:`);
+      console.log(res.text.replace(/^/gm, '  '));
+      appendLog(record.id, `CRITIQUE (${critic.name}):\n${res.text}`);
+    } catch (e) {
+      console.log(`critic · skipped (${e.message.split('\n')[0]})`);
+      appendLog(record.id, `CRITIQUE skipped: ${e.message.slice(0, 500)}`);
+    }
+  } else {
+    // deterministic rules critic ALWAYS fires when no chat lane exists - the
+    // critic role is unconditional; the tier is honestly labeled
+    try {
+      const { criticRules, renderCriticRules } = await import('../rulescritic.js');
+      const changed = (changedFilesList || []).map((c) => c.file);
+      const rr = criticRules({ brief, changed, diffsText: diffsTextForCritic || '', manifest: scopeManifest, evidenceKinds: evidenceKindsForCritic || [] });
+      console.log(`critic · rules tier (no chat lane on this machine):`);
+      console.log(renderCriticRules(rr).replace(/^/gm, '  ') || '  (no findings)');
+      appendLog(record.id, `CRITIQUE (rules tier):\n${renderCriticRules(rr)}`);
+      await addEvidence(record.id, { kind: 'citation', label: 'critic (rules tier) review', ref: `runs/${record.id}/run.log#critique` });
+      if (rr.findings.some((f) => f.severity === 'high')) {
+        appendLog(record.id, 'CRITIQUE rules tier: HIGH findings present - see above');
+      }
+    } catch (e) {
+      console.log(`critic · rules tier failed (${e.message.split('\n')[0]}) - recorded`);
+      appendLog(record.id, `CRITIQUE rules tier failed: ${e.message.slice(0, 300)}`);
+    }
+  }
+
+  })();
+
+  const verifyTask = (async () => {
+  console.log('\n── verify (in parallel with critique) ──');
+  const test = detectTestCommand(cwd);
+  let verifyEv = null;
+  if (test) {
+    try {
+      const { stdout } = await run(test.cmd, test.args, { cwd, timeout: 1000 * 60 * 10, maxBuffer: 1024 * 1024 * 16 });
+      verifyEv = { kind: 'command', label: test.label, by: 'verifier', command: `${test.cmd} ${test.args.join(' ')}`, argv: [test.cmd, ...test.args], exit: 0, output: stdout.slice(0, 4000) };
+      console.log(`verifier · ${test.label} ✓`);
+      appendLog(record.id, `VERIFY ${test.label} exit 0:\n${stdout.slice(0, 4000)}`);
+    } catch (e) {
+      verifyEv = { kind: 'command', label: test.label, by: 'verifier', command: `${test.cmd} ${test.args.join(' ')}`, argv: [test.cmd, ...test.args], exit: e.code ?? 1, output: String(e.stdout || e.message).slice(0, 4000) };
+      console.error(`verifier · ${test.label} ✗ (exit ${e.code ?? 1})`);
+      appendLog(record.id, `VERIFY ${test.label} FAILED:\n${String(e.stdout || e.message).slice(0, 4000)}`);
+    }
+    await addEvidence(record.id, verifyEv);
+  } else {
+    console.log('verifier · no project test command detected (package.json/Makefile/Cargo.toml/pyproject.toml)');
+    appendLog(record.id, 'VERIFY skipped: no test command detected');
+  }
+  })();
+
+  // both run concurrently; the single stream interleaves them as they happen
+  await Promise.all([critiqueTask, verifyTask]);
 
   // ---- 5. gate --------------------------------------------------------------
   console.log('\n── gate ─────────────────────────────');
