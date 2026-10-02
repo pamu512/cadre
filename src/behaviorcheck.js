@@ -28,6 +28,15 @@ export function keywords(text, max = 6) {
 }
 
 // paths mentioned in the behavior text (docs/X.md, src/x.js, scripts/x.sh, schemas/x.json)
+// issue refs mentioned in the behavior text (#123, GH-45, issue 7)
+export function mentionedIssues(text) {
+  const out = [];
+  const re = /(?:^|\s)(?:GH-|#)(\d{1,6})\b|(?:^|\s)issue\s+(\d{1,6})\b/gi;
+  let m;
+  while ((m = re.exec(String(text || '')))) out.push(Number(m[1] || m[2]));
+  return [...new Set(out)];
+}
+
 export function mentionedPaths(text) {
   const out = [];
   const re = /[\w./-]+\.(md|js|mjs|cjs|ts|py|sh|json|yaml|yml|toml|txt)\b/g;
@@ -64,7 +73,7 @@ function walkFiles(cwd, limit = 3000) {
 
 // Run ONE behavior's check against the tree. Returns:
 //   { closed, kind, citation?, reason }
-export function runBehaviorCheck(behavior, cwd, { testCmd = null, refPath = null } = {}) {
+export function runBehaviorCheck(behavior, cwd, opts = {}) {
   const text = String(behavior || '');
 
   // 1. file check: every path the behavior names exists
@@ -75,6 +84,13 @@ export function runBehaviorCheck(behavior, cwd, { testCmd = null, refPath = null
       return { closed: true, kind: 'file', citation: paths[0], reason: `named path(s) present: ${paths.join(', ')}` };
     }
     return { closed: false, kind: 'file', reason: `missing named path(s): ${missing.join(', ')}` };
+  }
+
+  // 1b. issue check: the behavior cites an issue number - the issue must EXIST
+  // (gh CLI when present, offline files otherwise). Closing cites the issue.
+  const issues = mentionedIssues(text);
+  if (issues.length && opts.ghRepo) {
+    return { closed: null, kind: 'issue', reason: `issue check deferred: ${issues.join(', ')}` };
   }
 
   // 2. test check: the behavior mentions tests -> the project's tests must pass
@@ -129,6 +145,14 @@ export function runBehaviorCheck(behavior, cwd, { testCmd = null, refPath = null
 // async wrapper: runs the test check kind by executing the project's tests
 export async function runBehaviorCheckAsync(behavior, cwd, opts = {}) {
   const sync = runBehaviorCheck(behavior, cwd, opts); // opts.refPath flows through
+  if (sync.kind === 'issue') {
+    const issues = mentionedIssues(behavior);
+    for (const n of issues) {
+      const okIssue = await issueExists(n, opts);
+      if (!okIssue.ok) return { closed: false, kind: 'issue', reason: `issue #${n}: ${okIssue.reason}` };
+    }
+    return { closed: true, kind: 'issue', citation: `issue #${issues.join(', #')}`, reason: 'all cited issues exist' };
+  }
   if (sync.kind !== 'test') return sync;
   if (!opts.testCmd) return { closed: false, kind: 'test', reason: 'no project test command detected' };
   try {
@@ -148,4 +172,39 @@ export async function verifyContract(behaviors, cwd, opts = {}) {
   }
   const closed = results.filter((r) => r.closed).length;
   return { results, closed, open: results.length - closed, total: results.length };
+}
+
+// does an issue exist? gh CLI (authoritative) -> offline gh-items cache -> absent
+async function issueExists(n, opts = {}) {
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const runE = promisify(execFile);
+  const gh = opts.gh || 'gh';
+  try {
+    const args = ['issue', 'view', String(n), '--json', 'number,state,title'];
+    if (opts.ghRepo) args.push('--repo', opts.ghRepo);
+    await runE(gh, args, { timeout: 15000 });
+    return { ok: true };
+  } catch (e) {
+    const out = String(e.stdout || '');
+    if (/"number"/.test(out)) return { ok: true };            // view printed the issue
+    if (/Could not resolve|NOT_FOUND|not found/i.test(out + e.message)) {
+      return { ok: false, reason: 'not found in the repo' };
+    }
+    // gh unavailable (offline/no auth): fall back to the offline cache
+    try {
+      const { existsSync, readFileSync } = await import('node:fs');
+      const { homedir } = await import('node:os');
+      const { join } = await import('node:path');
+      const cache = join(homedir(), '.cadre', 'gh-issues.json');
+      if (existsSync(cache)) {
+        const items = JSON.parse(readFileSync(cache, 'utf-8'));
+        if (Array.isArray(items) && items.some((i) => Number(i.number) === n)) return { ok: true };
+        return { ok: false, reason: 'not in offline issue cache' };
+      }
+      return { ok: false, reason: 'gh unavailable and no offline cache (~/.cadre/gh-issues.json)' };
+    } catch {
+      return { ok: false, reason: 'gh unavailable' };
+    }
+  }
 }

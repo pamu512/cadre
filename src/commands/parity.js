@@ -44,6 +44,19 @@ export async function cmdParity(args, flags) {
       console.error('parity --verify: no contract found (pass --ref <file> or run parity once first)');
       return 2;
     }
+    // drift check: a pinned contract must match the ref it was locked against
+    let pinned = null;
+    try { pinned = JSON.parse(readFileSync(join(home(), 'runs', [...readdirSync(join(home(), 'runs'))].sort().reverse().find((r) => existsSync(join(home(), 'runs', r, 'parity-contract.json'))) || '', 'parity-contract.json'), 'utf-8')); } catch { /* none */ }
+    if (pinned?.ref_sha256 && ref && existsSync(ref)) {
+      const { createHash } = await import('node:crypto');
+      const nowSha = createHash('sha256').update(readFileSync(ref, 'utf-8')).digest('hex');
+      if (nowSha !== pinned.ref_sha256) {
+        console.log(`parity verify · REF DRIFTED since the contract was pinned (${pinned.extracted})`);
+        console.log(`      pinned sha ${pinned.ref_sha256.slice(0, 12)}… != now ${nowSha.slice(0, 12)}… - re-run parity to re-pin, or verify consciously against the current text`);
+        if (!flags['accept-drift']) return 6;
+        console.log('      (--accept-drift: proceeding against the current ref text)');
+      }
+    }
     const cwd = typeof flags.cwd === 'string' ? flags.cwd : process.cwd();
     let testCmd = null;
     try {
@@ -56,7 +69,14 @@ export async function cmdParity(args, flags) {
     }
     console.log(`parity verify · ${behaviors.length} behavior(s) from ${source} against ${cwd}`);
     const { verifyContract } = await import('../behaviorcheck.js');
-    const v = await verifyContract(behaviors, cwd, { testCmd, refPath: source });
+    const { execFile } = await import('node:child_process');
+    let ghRepo = null;
+    try {
+      const { promisify } = await import('node:util');
+      const { stdout } = await promisify(execFile)('git', ['-C', cwd, 'remote', 'get-url', 'origin'], { timeout: 5000 });
+      ghRepo = /[:/]([^/]+\/[^/.]+)(?:\.git)?\s*$/.exec(stdout.trim())?.[1] || null;
+    } catch { /* no remote */ }
+    const v = await verifyContract(behaviors, cwd, { testCmd, refPath: source, ghRepo });
     for (const r of v.results) {
       console.log(`  ${r.closed ? '✓ closed' : '✗ open  '} [${r.kind}] ${r.behavior.slice(0, 80)}`);
       console.log(`      ${r.reason}${r.citation ? ' · cite: ' + r.citation : ''}`);
@@ -234,7 +254,16 @@ export async function cmdParity(args, flags) {
     appendLog(record.id, `PARITY CONTRACT: ${N} behaviors extracted from ${ref}:`);
     behaviors.forEach((b, i) => appendLog(record.id, `  [${i + 1}/${N}] ${b.slice(0, 120)}`));
     console.log(`parity contract: ${N} behavior(s) extracted from the ref (progress logged as [k/${N}])`);
-    writeFileSync(join(runDir(record.id), 'parity-contract.json'), JSON.stringify({ ref, behaviors, extracted: new Date().toISOString() }, null, 2));
+    // PIN: content hashes make the contract tamper-evident - a drifted ref is
+    // detected at verify time, not silently reinterpreted
+    const { createHash } = await import('node:crypto');
+    writeFileSync(join(runDir(record.id), 'parity-contract.json'), JSON.stringify({
+      ref,
+      ref_sha256: createHash('sha256').update(readFileSync(ref, 'utf-8')).digest('hex'),
+      behaviors,
+      behaviors_sha256: createHash('sha256').update(JSON.stringify(behaviors)).digest('hex'),
+      extracted: new Date().toISOString(),
+    }, null, 2));
     await addEvidence(record.id, { kind: 'artifact', label: `parity contract (${N} behaviors)`, path: join(runDir(record.id), 'parity-contract.json') });
   }
 
