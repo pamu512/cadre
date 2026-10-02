@@ -80,12 +80,18 @@ test('plan routes a real task and labels estimates as heuristic', async () => {
 });
 
 // ---- meter ------------------------------------------------------------------
-test('meter on an empty home says so honestly', async () => {
+test('meter on an empty home shows the harness dashboard honestly', async () => {
   const h = home('meter');
   const r = await cli(h, 'meter');
   assert.equal(r.rc, 0);
-  assert.ok(r.stdout.includes('no entitlements declared'));
+  // with no entitlements and no receipts of its own, it either says so plainly
+  // (machine without ax history) or shows the aggregate from ax logs - both honest
+  assert.ok(
+    r.stdout.includes('none declared') || r.stdout.includes('no entitlements declared'),
+    'must state that nothing is declared'
+  );
   assert.ok(r.stdout.includes('--set'), 'must show how to declare one');
+  assert.ok(r.stdout.includes('paid lanes only'), 'must state the free-lane exclusion');
 });
 
 test('meter --set / show / pacing round-trip', async () => {
