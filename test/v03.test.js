@@ -567,11 +567,12 @@ test('go: quiet hours enforced - refuses to spend, files paused-with-resume-plan
     name: 'file-writer', good_at: ['create', 'write'], cost: 'free', talks: 'terminal', proves: 'commands',
     invoke: { kind: 'command', command: `/bin/sh ${join(ROOT, 'scripts/fixture-writer.sh')} {brief}` },
   }));
-  // a window that always contains NOW: start 23h ago, end 1h from now (wraps midnight)
+  // a window that provably contains NOW: [now-1min, now+1min] in LOCAL clock time.
+  // (23h/+1h arithmetic can collapse to an empty window across clock shifts.)
   const now = new Date();
   const fmt = (d) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-  const s = new Date(now.getTime() - 23 * 3600e3);
-  const e = new Date(now.getTime() + 1 * 3600e3);
+  const s = new Date(now.getTime() - 60e3);
+  const e = new Date(now.getTime() + 60e3);
   writeFileSync(join(h.dir, 'pins.json'), JSON.stringify({ roles: {}, budget: null, quiet_hours: { start: fmt(s), end: fmt(e) } }));
   const proj = mkdtempSync(join(tmpdir(), 'quiet-'));
   writeFileSync(join(proj, 'package.json'), JSON.stringify({ name: 'p', scripts: { test: 'true' } }));
