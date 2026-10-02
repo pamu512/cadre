@@ -93,7 +93,7 @@ test('C5: malformed input never leaks raw stack traces', async () => {
   const h = home('errs');
   const probes = [
     ['go'], ['proof', 'zzz'], ['watch', 'zzz'], ['parity', 'x'], ['meter', '--set', 'x', '--quota', '-1'],
-    ['map', '/no/such/dir'], ['approach'], ['pin', '--role', 'garbage'], ['init', 'extra'],
+    ['map', '/no/such/dir'], ['approach'], ['pin', '--role', 'garbage'], ['init', 'extra'], ['debate'], ['watch'], ['parity'], ['metrics', '--report'], ['sweep', '--retire', 'zzzz'],
   ];
   for (const args of probes) {
     const r = await cli(h, ...args);

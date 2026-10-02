@@ -5,7 +5,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, existsSync, readdirSync, appendFileSync } from 'node:fs';
 import { home } from '../store.js';
 import { chatLaneAvailable, chatLane } from '../chatlane.js';
 import { buildRoster } from '../scan.js';
