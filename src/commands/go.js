@@ -343,6 +343,9 @@ meteredTokens += (res.usage?.total_tokens || 0);
   // artifact: the run's own log is always filed
   await addEvidence(record.id, { kind: 'artifact', label: `runs/${record.id}/run.log`, path: join(home(), 'runs', record.id, 'run.log') });
 
+  // the run's own log is always a followable citation (citations family)
+  await addEvidence(record.id, { kind: 'citation', label: 'run log (verifier-attributed)', ref: `runs/${record.id}/run.log`, by: 'verifier' });
+
   // ---- 5. gate --------------------------------------------------------------
   console.log('\n── gate ─────────────────────────────');
   // scope-creep check (PRD 6.6): diff outside the lock is caught here, with citation

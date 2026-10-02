@@ -81,9 +81,9 @@ export function gateVerdict(runRecord, { cwd = process.cwd() } = {}) {
   // citation-ref existence: a citation that points nowhere is a failed check,
   // not a passed one (refs may be relative to cwd, to CADRE_HOME, or ~/ paths)
   for (const c of checks.filter((c) => c.family === 'citations' && c.ok)) {
-    const raw = String(c.detail || '');
+    const raw = String(c.detail || '').split('#')[0];
     const expanded = raw.replace(/^~\//, homedir() + '/');
-    const cands = [expanded, resolve(cwd, raw), resolve(process.env.CADRE_HOME || join(homedir(), '.cadre'), raw.replace(/^runs\//, ''))];
+    const cands = [expanded, resolve(cwd, raw), resolve(process.env.CADRE_HOME || join(homedir(), '.cadre'), raw)];
     const exists = cands.some((p2) => existsSync(p2)) || /^https?:\/\//.test(raw);
     if (!exists) {
       c.ok = false;
@@ -100,9 +100,11 @@ export function gateVerdict(runRecord, { cwd = process.cwd() } = {}) {
   let independenceNote = 'n/a (no roles recorded)';
   const roles = runRecord.roles || {};
   if (roles.builder) {
-    const nonBuilders = Object.entries(roles).filter(([r]) => r !== 'builder').map(([, l]) => l);
+    const nonBuilderRoles = Object.entries(roles).filter(([r]) => r !== 'builder').map(([r]) => r);
+    const nonBuilderLanes = Object.values(roles).filter((l) => l !== roles.builder);
     const builderCmds = (runRecord.evidence || []).filter((e) => e.kind === 'command' && e.by === roles.builder);
-    const otherCmds = (runRecord.evidence || []).filter((e) => e.kind === 'command' && (!e.by || (nonBuilders.includes(e.by))));
+    // e.by carries the ROLE name ('verifier'|'critic') or a lane name; accept either
+    const otherCmds = (runRecord.evidence || []).filter((e) => e.kind === 'command' && (!e.by || nonBuilderRoles.includes(e.by) || nonBuilderLanes.includes(e.by)));
     const anyCmds = (runRecord.evidence || []).filter((e) => e.kind === 'command');
     if (anyCmds.length > 0 && otherCmds.length === 0) {
       independenceOk = false;
