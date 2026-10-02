@@ -1,7 +1,7 @@
-// frugal - B5, the caveman/rtk take: compress tool output before it enters
+// frugal - B5, the compressed-output discipline/output-filtering take: compress tool output before it enters
 // run.log or model context. Two donor rules baked in:
-//   caveman: every squeezed byte keeps a restorable backup - never destroy
-//   rtk:     if a "compression" would make output BIGGER, keep the original silently
+//   compressed-output discipline: every squeezed byte keeps a restorable backup - never destroy
+//   output-filtering:     if a "compression" would make output BIGGER, keep the original silently
 // Counters are logged so the savings are measurable, never invented.
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -12,7 +12,7 @@ export function compressOutput(text, { backupDir = null, label = 'output' } = {}
   const original = String(text);
   let out = original;
 
-  // 1. collapse runs of blank lines (caveman: prose padding dies, content stays)
+  // 1. collapse runs of blank lines (compressed-output discipline: prose padding dies, content stays)
   out = out.replace(/\n{3,}/g, '\n\n');
   // 2. strip trailing whitespace per line
   out = out.replace(/[ \t]+$/gm, '');
@@ -23,12 +23,12 @@ export function compressOutput(text, { backupDir = null, label = 'output' } = {}
     out = `${head}\n… [frugal: ${out.length} bytes → ${MAX_KEEP}, middle elided; full text backed up] …\n${tail}`;
   }
 
-  // rtk rule: never grow
+  // output-filtering rule: never grow
   if (out.length >= original.length) out = original;
 
   const saved = original.length - out.length;
 
-  // caveman rule: back up the original whenever anything was cut
+  // compressed-output discipline rule: back up the original whenever anything was cut
   if (saved > 0 && backupDir) {
     try {
       mkdirSync(backupDir, { recursive: true });

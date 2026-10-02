@@ -132,7 +132,7 @@ export async function cmdGo(args, flags, { cwd = process.cwd() } = {}) {
           }
           appendLog(record.id, `METER: ${m.lane} exhausted - falling down the chain`);
           console.log(`meter · ${m.lane} empty - falling down the chain`);
-          // 9router take: multi-tier fallback chain, included stops first
+          // plan-router take: multi-tier fallback chain, included stops first
           roster.lanes = roster.lanes.filter((l) => l.name !== m.lane);
           const { buildChain, pickStop } = await import('../fallback.js');
           const health = Object.fromEntries(roster.lanes.map((l) => [l.name, l.invoke?.status || 'ok']));

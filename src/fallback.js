@@ -1,4 +1,4 @@
-// fallback - the 9router take: multi-tier fallback chains. A chain is an
+// fallback - the plan-router take: multi-tier fallback chains. A chain is an
 // ordered list of (lane, tier) stops; when a stop is exhausted (meter says
 // empty, or the lane errors), the work moves to the next stop and the job
 // never stalls — and never surprise-bills (metered stops respect the budget).

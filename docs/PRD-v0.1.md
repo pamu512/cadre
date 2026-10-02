@@ -51,10 +51,10 @@ The user runs 3–7 subscriptions/CLIs that don't know about each other, can't p
 
 | Player | What it has | What it lacks (Cadre's wedge) |
 |---|---|---|
-| builderz-labs/mission-control (closest; 6.3k★, alpha) | self-hosted lanes (OpenClaw/CC/Codex/frameworks), spend views, LLM-verdict gate, MCP/CLI | artifact-evidence gate (theirs is a verdict string); meters (keyword tiers); sweep (retry counters); editor head |
+| the closest competitor (closest; 6.3k★, alpha) | self-hosted lanes (OpenClaw/CC/Codex/frameworks), spend views, LLM-verdict gate, MCP/CLI | artifact-evidence gate (theirs is a verdict string); meters (keyword tiers); sweep (retry counters); editor head |
 | Gas Town | roles, Bors verify gates, quota batching, crash persistence | Claude-Code-centric; no cost routing; no human/GUI lanes |
 | HAR | best evidence gating (tree-hash commit gate), agent-agnostic | no crews, no routing, lifecycle ends at handoff |
-| 9Router / TeamClaude / CLIProxyAPI | real quota-window routing | single-user proxies; no runs, no gate |
+| plan-router / TeamClaude / CLIProxyAPI | real quota-window routing | single-user proxies; no runs, no gate |
 | Claude Code stop hooks / Agent Teams | native gating + crews | single-vendor; transcript-only judgment |
 
 **Moats to defend:** meters (least-served pillar), sweep (research-only), artifact-evidence gate as *product* (naming-age microcategory — one cycle to claim it), cross-vendor neutrality + local trust (what incumbents structurally won't ship).
@@ -92,7 +92,7 @@ Priorities: **P0** = trust core (without these it isn't Cadre) · **P1** = econo
 
 ### 6.6 Discipline (scope + tokens)
 - **P1** Scope lock: brief → manifest (files, exclusions, done-condition); every loop re-reads it; creep (diff outside the lock) is caught at the gate with the critic's citation. Dogfooded on Cadre's own repo.
-- **P2** Frugal pipes (compress tool output before context; compose with rtk-style tooling); patch+confine edits inside the lock.
+- **P2** Frugal pipes (compress tool output before context; compose with output-filtering-style tooling); patch+confine edits inside the lock.
 
 ### 6.7 Depth — parity · debate
 - **P2** `cadre parity "match X" --ref`: contract from cited reference (behaviors ↔ checks ↔ citations); unattended loops; parity ledger; stretch items proposed, never smuggled.
@@ -157,4 +157,4 @@ Priorities: **P0** = trust core (without these it isn't Cadre) · **P1** = econo
 - Market deep-research (6 dives, ~110 searches, graded): `../research/muster-market-20261001-1930/` (see `insight.md`, `verify.md`)
 - Concept page (12-command grammar, anatomy): `../V1 Cadre.html`
 - Live harness (reference implementation of debate + evidence gate): `~/.local/bin/ax`, audit at `~/.config/ax/`
-- Key external: MAST arXiv:2503.13657 · mission-control (closest competitor) · "Safe to Resume?" arXiv:2608.29381 · IETF draft-sharif-agent-audit-trail
+- Key external: MAST arXiv:2503.13657 · the closest competitor (closest competitor) · "Safe to Resume?" arXiv:2608.29381 · IETF draft-sharif-agent-audit-trail

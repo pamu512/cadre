@@ -1,5 +1,5 @@
-// chisel-take: patch-scoped file edits with enforced path confinement.
-// Donor: ckanthony/Chisel ("precise hands" — patch edits + kernel-enforced
+// patch-confinement-take: patch-scoped file edits with enforced path confinement.
+// Design source: patch-confinement tooling ("precise hands" — patch edits + enforced
 // path confinement). Cadre's version: a patch language small enough to audit
 // (exact-match find→replace per file), applied ONLY inside a confinement root,
 // with every rejected op explained. The loop hands builders this instead of
@@ -45,7 +45,7 @@ export function applyPatches(patches, opts = {}) {
   return patches.map((p) => applyPatch(p, opts));
 }
 
-// smoke check the confinement boundary itself (the Chisel security property)
+// smoke check the confinement boundary itself (the patch-confinement security property)
 export function confined(path, root = process.cwd()) {
   const rel = relative(resolve(root), resolve(isAbsolute(path) ? path : join(root, path)));
   return !rel.startsWith('..') && !isAbsolute(rel);

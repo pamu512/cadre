@@ -542,7 +542,7 @@ test('meter preflight: empty lane within wait window pauses with resume plan', a
   assert.equal(pacing({ quota: 1000, resetAt: soon, used: 1000 }).state, 'empty');
 });
 
-// ---- donor takes: frugal (caveman/rtk), graph tags+paths (graphify) ---------
+// ---- donor takes: frugal (compressed-output discipline/output-filtering), graph tags+paths (code-graph) ---------
 test('frugal: compress, back up, never grow, count savings', async () => {
   const { compressOutput } = await import(join(ROOT, 'src/frugal.js'));
   const h = home('frugal');
@@ -550,9 +550,9 @@ test('frugal: compress, back up, never grow, count savings', async () => {
   const c = compressOutput(big, { backupDir: join(h.dir, 'bk'), label: 't' });
   assert.ok(c.saved > 0);
   assert.ok(c.compressedBytes < c.originalBytes);
-  assert.ok(existsSync(join(h.dir, 'bk', 't.orig.txt')), 'caveman rule: original must be backed up');
+  assert.ok(existsSync(join(h.dir, 'bk', 't.orig.txt')), 'compressed-output discipline rule: original must be backed up');
   assert.ok(c.text.length < big.length);
-  // rtk rule: tiny input never grows
+  // output-filtering rule: tiny input never grows
   const tiny = compressOutput('ok', {});
   assert.equal(tiny.saved, 0);
   assert.equal(tiny.text, 'ok');
@@ -562,7 +562,7 @@ test('frugal: compress, back up, never grow, count savings', async () => {
   assert.ok(huge.text.includes('[frugal:'));
 });
 
-test('graphify takes: EXTRACTED/INFERRED edge tags + path queries', async () => {
+test('code-graph takes: EXTRACTED/INFERRED edge tags + path queries', async () => {
   const { buildIndex } = await import(join(ROOT, 'src/map.js'));
   const { taggedEdges, pathBetween } = await import(join(ROOT, 'src/graph.js'));
   const idx = buildIndex(ROOT);
@@ -577,8 +577,8 @@ test('graphify takes: EXTRACTED/INFERRED edge tags + path queries', async () => 
   assert.equal(none.found, false);
 });
 
-// ---- leftovers: chisel patch / 9router chains / go --local / B8 / B9 --------
-test('chisel take: patch edits are unique-match, confined, and reported', async () => {
+// ---- leftovers: patch-confinement patch / plan-router chains / go --local / B8 / B9 --------
+test('patch-confinement take: patch edits are unique-match, confined, and reported', async () => {
   const { applyPatch, applyPatches, confined } = await import(join(ROOT, 'src/patch.js'));
   const h = home('patch');
   writeFileSync(join(h.dir, 'a.txt'), 'alpha beta gamma\n');
@@ -602,7 +602,7 @@ test('chisel take: patch edits are unique-match, confined, and reported', async 
   assert.ok(batch[0].ok);
 });
 
-test('9router take: multi-tier fallback chain picks live stops, skips empty', async () => {
+test('plan-router take: multi-tier fallback chain picks live stops, skips empty', async () => {
   const { buildChain, pickStop } = await import(join(ROOT, 'src/fallback.js'));
   const roster = { lanes: [
     { name: 'sub-lane', cost: 'plan' },

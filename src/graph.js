@@ -87,8 +87,8 @@ export function loadMapFor(root) {
   return loadMap(root || process.cwd());
 }
 
-// ---- graphify takes ----------------------------------------------------------
-// EXTRACTED vs INFERRED edges (donor: Graphify-Labs/graphify): every connection
+// ---- code-graph takes ----------------------------------------------------------
+// EXTRACTED vs INFERRED edges (donor: code-graph-Labs/code-graph): every connection
 // carries a confidence tag so readers can tell what was read directly from
 // source (import statements) vs inferred by resolution (extension guesses).
 export function taggedEdges(map) {
@@ -102,7 +102,7 @@ export function taggedEdges(map) {
   return out;
 }
 
-// path query (donor: graphify `path A B`): shortest hop chain between two files
+// path query (donor: code-graph `path A B`): shortest hop chain between two files
 // over the import graph, BFS, direction-agnostic.
 export function pathBetween(map, aRaw, bRaw) {
   const edges = taggedEdges(map);

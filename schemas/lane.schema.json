@@ -40,7 +40,7 @@
     "craft": {
       "type": "array",
       "items": { "type": "string" },
-      "description": "Named, versioned skills this lane swears by (superpowers-style)."
+      "description": "Named, versioned skills this lane swears by (skills-framework-style)."
     },
     "invoke": {
       "type": "object",
