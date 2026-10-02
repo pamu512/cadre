@@ -272,7 +272,7 @@ meteredTokens += (res.usage?.total_tokens || 0);
   if (builder) {
     try {
       console.log(`builder · ${builder.name} on the task`);
-      const res = await invokeLane(builder, brief, { timeoutMs: 1000 * 60 * 30, override: Boolean(flags.override), context: flags.context, cwd });
+      const res = await invokeLane(builder, brief, { timeoutMs: 1000 * 60 * 30, override: Boolean(flags.override), context: flags.context, cwd, mcpAgent: Boolean(flags["mcp-agent"]) });
       buildOutput = res.stdout || res.text || '';
       // B5 frugal pipes: compress before the ledger; original backed up, savings counted
       const { compressOutput } = await import('../frugal.js');

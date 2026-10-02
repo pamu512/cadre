@@ -21,7 +21,7 @@ import { cmdMcp } from '../src/commands/mcp.js';
 // flags that take a value as the next token (--flag value); all others are boolean
 const VALUE_FLAGS = new Set([
   'impl', 'budget', 'context', 'timeout', 'why', 'retire', 'resume', 'clear', 'role', 'ref',
-  'quiet', 'set', 'provider', 'quota', 'reset', 'rollover', 'rail', 'lane', 'scope', 'lines', 'root',
+  'quiet', 'set', 'provider', 'quota', 'reset', 'rollover', 'rail', 'lane', 'scope', 'lines', 'root', 'mcp-agent',
 ]);
 
 function parseArgv(argv) {

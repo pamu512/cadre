@@ -56,7 +56,12 @@ export async function invokeLane(lane, task, opts = {}) {
     }
   }
   if (kind === 'mcp') {
-    // MCP server lane: full stdio JSON-RPC lifecycle (initialize -> tools -> call)
+    // MCP server lane. Agent mode chains multiple tools per brief (one server,
+    // step-over-step tool picking); single-shot answers one tool.
+    if (opts.mcpAgent) {
+      const { invokeMcpAgent } = await import('./mcplane.js');
+      return await invokeMcpAgent(lane, task, opts);
+    }
     return await invokeMcpLane(lane, task, opts);
   }
   if (kind === 'app') {
