@@ -5,13 +5,144 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { existsSync, appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, appendFileSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { createRun, updateRun, appendLog, addEvidence, audit, home, runDir } from '../store.js';
 
 const run = promisify(execFile);
 const AX = process.env.CADRE_AX || join(homedir(), '.local/bin/ax');
 
 export async function cmdParity(args, flags) {
+  // --verify: run the behavior-closing executor against the current tree.
+  // Each open behavior gets a deterministic check (named file exists / tests
+  // pass / keywords co-occur); closed rows carry file:line citations.
+  if (flags.verify) {
+    const ref = String(flags.ref || '');
+    let behaviors = [];
+    let source = '';
+    if (ref && existsSync(ref)) {
+      source = ref;
+      behaviors = readFileSync(ref, 'utf-8').split('\n')
+        .map((l) => l.trim())
+        .filter((l) => /^([-*]\s+\S|^#{1,4}\s+\S|\S)/.test(l))
+        .filter((l) => l.length > 8 && !/^[-*=#]{3,}$/.test(l))
+        .slice(0, 40)
+        .map((l) => l.replace(/^#{1,4}\s+/, '').replace(/^[-*]\s+/, ''));
+    } else {
+      // latest contract from the most recent parity run
+      const runs = [...readdirSync(join(home(), 'runs'))].sort().reverse();
+      for (const r of runs) {
+        const cf = join(home(), 'runs', r, 'parity-contract.json');
+        if (existsSync(cf)) {
+          const c = JSON.parse(readFileSync(cf, 'utf-8'));
+          behaviors = c.behaviors || [];
+          source = `runs/${r}/parity-contract.json`;
+          break;
+        }
+      }
+    }
+    if (!behaviors.length) {
+      console.error('parity --verify: no contract found (pass --ref <file> or run parity once first)');
+      return 2;
+    }
+    const cwd = typeof flags.cwd === 'string' ? flags.cwd : process.cwd();
+    let testCmd = null;
+    try {
+      const pkg = JSON.parse(readFileSync(join(cwd, 'package.json'), 'utf-8'));
+      if (pkg.scripts?.test) testCmd = { cmd: 'npm', args: ['test'], label: 'npm test' };
+    } catch {
+      for (const [mk, args] of [['make', ['test']], ['cargo', ['test']], ['python', ['-m', 'pytest']]]) {
+        if (existsSync(join(cwd, mk === 'make' ? 'Makefile' : mk === 'cargo' ? 'Cargo.toml' : 'pyproject.toml'))) { testCmd = { cmd: mk, args }; break; }
+      }
+    }
+    console.log(`parity verify · ${behaviors.length} behavior(s) from ${source} against ${cwd}`);
+    const { verifyContract } = await import('../behaviorcheck.js');
+    const v = await verifyContract(behaviors, cwd, { testCmd, refPath: source });
+    for (const r of v.results) {
+      console.log(`  ${r.closed ? '✓ closed' : '✗ open  '} [${r.kind}] ${r.behavior.slice(0, 80)}`);
+      console.log(`      ${r.reason}${r.citation ? ' · cite: ' + r.citation : ''}`);
+    }
+    // ledger rows: closed behaviors get citations, open ones say why
+    const ledgerPath = join(home(), 'parity-ledger.jsonl');
+    mkdirSync(home(), { recursive: true });
+    for (const r of v.results) {
+      appendFileSync(ledgerPath, JSON.stringify({
+        ts: new Date().toISOString(),
+        run: 'verify',
+        target: r.behavior.slice(0, 200),
+        ref: source,
+        verdict: r.closed ? `behavior-closed (${r.kind})` : 'behavior-open',
+        evidence_count: r.closed ? 1 : 0,
+        citation: r.citation || '',
+      }) + '\n');
+    }
+    console.log(`\nparity verify: ${v.closed}/${v.total} closed · ${v.open} open (ledger rows filed)`);
+    return v.open === 0 ? 0 : 1;
+  }
+  // --until-proven: loop verify -> build-open-behaviors -> re-verify until the
+  // contract closes, the iteration cap hits, or 2 consecutive builds fail to
+  // move the count (circuit breaker). Every stop reason is stated.
+  if (flags['until-proven']) {
+    const ref = String(flags.ref || '');
+    if (!ref || !existsSync(ref)) {
+      console.error('parity --until-proven requires --ref <file>');
+      return 2;
+    }
+    const cwd = typeof flags.cwd === 'string' ? flags.cwd : process.cwd();
+    const maxIter = Math.max(1, Math.min(Number(flags['max-iter']) || 5, 20));
+    const extract = () => readFileSync(ref, 'utf-8').split('\n')
+      .map((l) => l.trim())
+      .filter((l) => /^([-*]\s+\S|^#{1,4}\s+\S|\S)/.test(l))
+      .filter((l) => l.length > 8 && !/^[-*=#]{3,}$/.test(l))
+      .slice(0, 40)
+      .map((l) => l.replace(/^#{1,4}\s+/, '').replace(/^[-*]\s+/, ''));
+    const { verifyContract } = await import('../behaviorcheck.js');
+    const testCmd = (() => {
+      try {
+        const pkg = JSON.parse(readFileSync(join(cwd, 'package.json'), 'utf-8'));
+        if (pkg.scripts?.test) return { cmd: 'npm', args: ['test'], label: 'npm test' };
+      } catch { /* none */ }
+      return null;
+    })();
+    const { invokeLane } = await import('../invoke.js');
+    const { buildRoster } = await import('../scan.js');
+    let noMoveStreak = 0;
+    let prevClosed = -1;
+    for (let iter = 1; iter <= maxIter; iter++) {
+      const v = await verifyContract(extract(), cwd, { testCmd, refPath: ref });
+      console.log(`\nparity loop · iteration ${iter}/${maxIter}: ${v.closed}/${v.total} closed`);
+      const open = v.results.filter((r) => !r.closed);
+      for (const r of open.slice(0, 5)) console.log(`  open [${r.kind}] ${r.behavior.slice(0, 90)}\n      ${r.reason}`);
+      if (open.length === 0) {
+        console.log('parity loop · ALL BEHAVIORS CLOSED - contract matches the build');
+        return 0;
+      }
+      if (v.closed === prevClosed) {
+        noMoveStreak += 1;
+        if (noMoveStreak >= 2) {
+          console.log(`parity loop · CIRCUIT BREAKER: 2 iterations without closing a behavior - stopping honestly (${v.closed}/${v.total})`);
+          return 4;
+        }
+      } else noMoveStreak = 0;
+      prevClosed = v.closed;
+      // build toward the OPEN behaviors: hand them to the best builder lane
+      const roster = await buildRoster();
+      const builder = roster.lanes.find((l) => l.invoke?.kind === 'command') || null;
+      if (!builder) {
+        console.log('parity loop · no file-acting builder lane available - stopping (declare one in ~/.cadre/lanes/)');
+        return 3;
+      }
+      const brief = `Close these parity behaviors in ${cwd}:\n${open.slice(0, 10).map((r, i) => `${i + 1}. ${r.behavior.slice(0, 140)}`).join('\n')}`;
+      console.log(`parity loop · builder ${builder.name} on ${Math.min(open.length, 10)} open behavior(s)`);
+      const res = await invokeLane(builder, brief, { timeoutMs: 1000 * 60 * 30, cwd });
+      console.log(`parity loop · builder ${res.ok ? 'done' : 'FAILED'}${res.ok ? '' : ': ' + String(res.error || '').slice(0, 120)}`);
+      if (!res.ok && ++noMoveStreak >= 2) {
+        console.log('parity loop · CIRCUIT BREAKER: builder failing repeatedly - stopping honestly');
+        return 4;
+      }
+    }
+    console.log(`parity loop · ITERATION CAP (${maxIter}) - stopping with contract still open (raise --max-iter)`);
+    return 5;
+  }
   // B6: cadre parity --ledger renders the parity ledger (no build)
   if (flags.ledger) {
     const { readFileSync } = await import('node:fs');

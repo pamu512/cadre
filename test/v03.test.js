@@ -374,3 +374,40 @@ test('go: early-aborted runs still carry the usage rollup', { timeout: 120000 },
   const rec = JSON.parse(readFileSync(join(h.dir, 'runs', runs[runs.length - 1], 'run.json'), 'utf-8'));
   assert.ok(rec.usage?.budget_tokens, 'usage rollup must exist even on aborted runs');
 });
+
+test('parity --verify: behavior-closing executor with citations; ref excluded (no circularity)', async () => {
+  const { runBehaviorCheck, keywords, mentionedPaths } = await import(join(ROOT, 'src/behaviorcheck.js'));
+  // file check: named path exists
+  const f = runBehaviorCheck('provide docs/README.md with usage', ROOT, { refPath: null });
+  assert.ok(f.closed && f.kind === 'file' && f.citation === 'docs/README.md', 'file check closes with path cite');
+  // file check: missing path stays open honestly
+  const f2 = runBehaviorCheck('provide docs/NOPE.md with usage', ROOT, { refPath: null });
+  assert.ok(!f2.closed && /missing/.test(f2.reason));
+  // keyword check with ref EXCLUDED: the spec doc itself must not satisfy it
+  const proj = mkdtempSync(join(tmpdir(), 'beh-'));
+  writeFileSync(join(proj, 'SPEC.md'), 'the zebraconfig module must exist somewhere\n');
+  writeFileSync(join(proj, 'impl.js'), 'export const zebraconfig = 1;\n');
+  const hit = runBehaviorCheck('the zebraconfig module must exist somewhere', proj, { refPath: 'SPEC.md' });
+  assert.ok(hit.closed && hit.citation === 'impl.js:1', 'citation must point at the implementation, not the ref: ' + hit.citation);
+  // and with only the ref containing the words, it must NOT close
+  const proj2 = mkdtempSync(join(tmpdir(), 'beh2-'));
+  writeFileSync(join(proj2, 'SPEC.md'), 'the zebraconfig module must exist somewhere\n');
+  const miss = runBehaviorCheck('the zebraconfig module must exist somewhere', proj2, { refPath: 'SPEC.md' });
+  assert.ok(!miss.closed, 'ref-only keyword hit must stay open');
+});
+
+test('parity --until-proven: loop closes the contract via a builder', { timeout: 240000 }, async () => {
+  const h = home('parityloop');
+  mkdirSync(join(h.dir, 'lanes'), { recursive: true });
+  writeFileSync(join(h.dir, 'lanes', 'spec-builder.json'), JSON.stringify({
+    name: 'spec-builder', good_at: ['create', 'write'], cost: 'free', talks: 'terminal', proves: 'commands',
+    invoke: { kind: 'command', command: `/bin/sh ${join(ROOT, 'scripts/spec-fixture.sh')} {brief}` },
+  }));
+  const proj = mkdtempSync(join(tmpdir(), 'parityloop-'));
+  writeFileSync(join(proj, 'package.json'), JSON.stringify({ name: 'p', scripts: { test: 'node -e "process.exit(0)"' } }));
+  writeFileSync(join(proj, 'SPEC.md'), '# Spec\n\n- create hello.txt containing greeting text\n- provide src/utils.js with a greet function\n');
+  const r = await cli(h, 'parity', 'match the spec', '--ref', join(proj, 'SPEC.md'), '--cwd', proj, '--until-proven', '--max-iter', '3');
+  assert.ok(r.stdout.includes('ALL BEHAVIORS CLOSED'), 'loop must converge: ' + r.stdout.split('\n').slice(-4).join(' | '));
+  assert.ok(existsSync(join(proj, 'hello.txt')));
+  assert.ok(existsSync(join(proj, 'src', 'utils.js')));
+});
