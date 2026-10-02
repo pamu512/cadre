@@ -11,6 +11,7 @@ import { cmdMap } from '../src/commands/map.js';
 import { cmdWatch } from '../src/commands/watch.js';
 import { cmdProof } from '../src/commands/proof.js';
 import { cmdMetrics } from '../src/commands/metrics.js';
+import { cmdApproach } from '../src/commands/approach.js';
 import { cmdDebate } from '../src/commands/debate.js';
 import { cmdPin } from '../src/commands/pin.js';
 import { cmdMcp } from '../src/commands/mcp.js';
@@ -18,7 +19,7 @@ import { cmdMcp } from '../src/commands/mcp.js';
 // flags that take a value as the next token (--flag value); all others are boolean
 const VALUE_FLAGS = new Set([
   'impl', 'budget', 'context', 'timeout', 'why', 'retire', 'resume', 'clear', 'role', 'ref',
-  'quiet', 'set', 'provider', 'quota', 'reset', 'rollover', 'rail', 'lane', 'scope', 'lines',
+  'quiet', 'set', 'provider', 'quota', 'reset', 'rollover', 'rail', 'lane', 'scope', 'lines', 'root',
 ]);
 
 function parseArgv(argv) {
@@ -65,6 +66,7 @@ async function main() {
     case 'watch': return cmdWatch(_, flags);
     case 'proof': return cmdProof(_, flags);
     case 'metrics': return cmdMetrics(_, flags);
+    case 'approach': return cmdApproach(_, flags);
     case 'debate': return cmdDebate(_, flags);
     case 'pin': return cmdPin(_, flags);
     case 'mcp': return cmdMcp(_, flags);

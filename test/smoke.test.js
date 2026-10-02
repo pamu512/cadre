@@ -449,3 +449,45 @@ test('router: no hardcoded provider names — preferences come from data', async
   assert.ok(!/PREFERRED\s*=\s*new Map\(\[/.test(src), 'PREFERRED must not be a hardcoded literal map');
   assert.ok(src.includes('reasoning.json'), 'preference source must be the data file');
 });
+
+// ---- capability organs: taskfit / graph / approach --------------------------
+test('taskfit: classify + per-task ranking (history-aware, provider-neutral)', async () => {
+  const { classifyTask, rankForTask } = await import(join(ROOT, 'src/taskfit.js'));
+  const cls = classifyTask('fix the flaky login UI test');
+  assert.ok(cls.includes('ui') && cls.includes('tests') && cls.includes('debug'), `got ${cls}`);
+  assert.ok(classifyTask('add a CSV export')[0] === 'general');
+  const roster = { lanes: [
+    { name: 'lane-a', good_at: ['ui', 'design'], cost: 'free' },
+    { name: 'lane-b', good_at: ['backend'], cost: 'metered' },
+  ] };
+  const ranked = rankForTask(roster, 'redesign the login UI');
+  assert.equal(ranked[0].lane, 'lane-a');
+  assert.ok(ranked[0].score > ranked.find((r) => r.lane === 'lane-b').score);
+});
+test('graph: impact + blast radius over the real import graph', async () => {
+  const { buildIndex } = await import(join(ROOT, 'src/map.js'));
+  const { impactOf, blastRadius, sliceFor } = await import(join(ROOT, 'src/graph.js'));
+  const idx = buildIndex(ROOT);
+  const imp = impactOf(idx, ['src/store.js']);
+  assert.ok(imp.impacted.length >= 5, `store.js should impact many files, got ${imp.impacted.length}`);
+  assert.ok(imp.impacted.includes('bin/cadre.js'));
+  const br = blastRadius(idx, ['src/store.js']);
+  assert.equal(br.risk, 'high');
+  const slice = sliceFor(idx, 'change updateRun in the store');
+  assert.ok(slice.some((s) => s.file === 'src/store.js'));
+  // isolated file: near-zero impact
+  const iso = blastRadius(idx, ['docs/nothing.js']);
+  assert.equal(iso.impacted, 0);
+});
+
+test('approach: produces class + ranking + slice + steps before spend', async () => {
+  const h = home('approach');
+  const r = await cli(h, 'approach', 'change updateRun in the store', '--root', ROOT);
+  assert.equal(r.rc, 0);
+  assert.ok(r.stdout.includes('job class'));
+  assert.ok(r.stdout.includes('best lane'));
+  assert.ok(r.stdout.includes('blast radius'));
+  assert.ok(r.stdout.includes('cadre go'));
+  const j = JSON.parse((await cli(h, 'approach', 'x', '--root', ROOT, '--json')).stdout);
+  assert.ok(j.classes.length >= 1 && j.ranking.length >= 1 && Array.isArray(j.steps));
+});
