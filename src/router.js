@@ -76,7 +76,7 @@ export function historyPenalty(lane, injectedHistory = null) {
   return 4; // struggling
 }
 
-export function scoreLane(lane, role, taskClass = null, entitlements = null) {
+export function scoreLane(lane, role, taskClass = null, entitlements = null, craftHits = null) {
   const tags = lane.good_at || [];
   const wanted = ROLE_TAGS[role] || [];
   let overlap = tags.filter((t) => wanted.includes(t)).length;
@@ -85,6 +85,17 @@ export function scoreLane(lane, role, taskClass = null, entitlements = null) {
   const prefBonus = preferred > -1 ? 3 - Math.min(preferred, 2) : 0;
   const penalty = availabilityPenalty(lane);
   const histPenalty = historyPenalty(lane);
+  // NAMED HANDS CARRY CRAFT: a lane's declared craft (languages, frameworks,
+  // domains) earns the work when the brief touches it - craft is capability
+  // detail, so it ADDS fit; absence of craft costs nothing (generalist lanes
+  // stay eligible).
+  let craftAdj = 0;
+  let craftNote = null;
+  const crafts = craftHits?.get(lane.name);
+  if (crafts && crafts.length) {
+    craftAdj = Math.min(2, crafts.length);
+    craftNote = `craft: ${crafts.join(', ')}`;
+  }
   // THE ROUTER READS ENTITLEMENTS: meter state moves the score at route time.
   //   empty  -> hard demotion (a spent lane loses to everything declared ok)
   //   pacing -> mild demotion (works, but the meter says pace it)
@@ -108,7 +119,7 @@ export function scoreLane(lane, role, taskClass = null, entitlements = null) {
   else if (policy === 'free-first' && lane.cost === 'metered') { classAdj = -2; classNote = 'task deterministic · metered penalized'; }
   else if (policy === 'capability-first' && (lane.cost === 'metered' || lane.cost === 'plan')) { classAdj = 2; classNote = 'task judgment · frontier preferred'; }
   else if (policy === 'capability-first' && lane.cost === 'free') { classAdj = -1; classNote = 'task judgment · free lane discounted'; }
-  const fit = overlap * 2 + prefBonus - penalty - histPenalty + classAdj + entAdj;
+  const fit = overlap * 2 + prefBonus - penalty - histPenalty + classAdj + entAdj + craftAdj;
   const h = laneHistory().get(lane.name);
   const why = [
     `good_at ∩ ${role}: ${overlap}`,
@@ -118,6 +129,7 @@ export function scoreLane(lane, role, taskClass = null, entitlements = null) {
     histPenalty ? `history ${h.passed}/${h.runs} passed` : null,
     classNote,
     entNote,
+    craftNote,
   ].filter(Boolean).join(' · ');
   return { role, lane: lane.name, fit, costRank: COST_RANK[lane.cost] ?? 3, why };
 }
@@ -129,6 +141,16 @@ export function assignRoles(roster, { brief = '' } = {}) {
   const used = new Set();
   const task = classifyTask(brief);
   assignments.taskClass = task; // surfaced by explainRouting
+  // craft matching: which of each lane's declared crafts does THIS brief touch?
+  const briefWords = new Set(String(brief || '').toLowerCase().match(/[a-z][a-z0-9+#.-]{1,}/g) || []);
+  const craftHits = new Map();
+  for (const l of roster.lanes) {
+    const hits = (l.craft || []).filter((c) => {
+      const cl = String(c).toLowerCase();
+      return briefWords.has(cl) || [...briefWords].some((w) => w.includes(cl) && cl.length >= 3);
+    });
+    if (hits.length) craftHits.set(l.name, hits);
+  }
   // entitlement snapshot: the router SEES every declared meter, per lane,
   // grouped per provider (available for display and scoring)
   let entitlements = null;
@@ -149,7 +171,7 @@ export function assignRoles(roster, { brief = '' } = {}) {
     if (assignments.some((a) => a.role === role)) continue;
     const scored = roster.lanes
       .filter((l) => !used.has(l.name))
-      .map((l) => scoreLane(l, role, task, entitlements))
+      .map((l) => scoreLane(l, role, task, entitlements, craftHits))
       .filter((s) => s.fit > 0)
       .sort((a, b) => b.fit - a.fit || a.costRank - b.costRank); // fit first, cost only breaks ties
     if (scored.length === 0) {

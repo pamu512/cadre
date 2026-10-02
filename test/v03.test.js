@@ -697,3 +697,17 @@ test('degrade on empty: pause-with-resume-plan when reset is close (no silent de
   assert.equal(rec.status, 'resumed-brief');
   assert.ok(!existsSync(join(proj, 'paused.txt')), 'no spend while paused');
 });
+
+test('named hands carry craft: craft tags move routing when the brief touches them', async () => {
+  const { assignRoles } = await import(join(ROOT, 'src/router.js'));
+  const roster = { lanes: [
+    { name: 'generalist', good_at: ['edits', 'tests'], cost: 'plan', invoke: {} },
+    { name: 'rustacean', good_at: ['edits', 'tests'], cost: 'plan', craft: ['rust', 'ffi'], invoke: {} },
+  ] };
+  const pick = (x) => x.assignments.find((r) => r.role === 'builder');
+  const a = assignRoles(roster, { brief: 'refactor the rust parser module' });
+  assert.equal(pick(a).lane, 'rustacean', 'crafted lane earns the brief');
+  assert.ok(pick(a).why.includes('craft: rust'), 'craft stated in the why line');
+  const b = assignRoles(roster, { brief: 'refactor the parser module' });
+  assert.equal(pick(b).lane, 'generalist', 'no craft signal -> generalist eligible, no penalty');
+});
