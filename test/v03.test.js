@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync, readdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync, readdirSync, appendFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -656,4 +656,44 @@ test('pace to the window: no-close refuses BEFORE spend; pace mode throttles via
   assert.equal(rec.status, 'resumed-brief');
   assert.ok(rec.verdict.summary.includes("doesn't close"));
   assert.ok(!existsSync(join(proj, 'paceproof.txt')), 'nothing spent');
+});
+
+test('degrade on empty: quota gone -> downshift to the next COVERED, FITTING, DRIVABLE lane; work completes', { timeout: 180000 }, async () => {
+  const h = home('degrade');
+  mkdirSync(join(h.dir, 'lanes'), { recursive: true });
+  for (const [f, name, cost] of [['a.json', 'fast-writer', 'free'], ['b.json', 'spare-writer', 'plan']]) {
+    writeFileSync(join(h.dir, 'lanes', f), JSON.stringify({
+      name, good_at: ['create', 'write'], cost, talks: 'terminal', proves: 'commands',
+      invoke: { kind: 'command', command: `/bin/sh ${join(ROOT, 'scripts/fixture-writer.sh')} {brief}` },
+    }));
+  }
+  await cli(h, 'meter', '--set', 'lane=fast-writer', '--provider', 'demo', '--quota', '1000', '--reset', '2026-10-04T00:00:00Z');
+  appendFileSync(join(h.dir, 'audit.log'), JSON.stringify({ kind: 'lane-call', lane: 'fast-writer', usage: { total_tokens: 1000 }, ok: true }) + '\n');
+  const proj = mkdtempSync(join(tmpdir(), 'degrade-'));
+  writeFileSync(join(proj, 'package.json'), JSON.stringify({ name: 'p', scripts: { test: 'true' } }));
+  const r = await cli(h, 'go', 'create final.txt containing the single line: degrade-proven', '--cwd', proj);
+  assert.ok(r.stdout.includes('fast-writer empty - falling down the chain'), 'empty detected');
+  assert.ok(r.stdout.includes('chain · stop 1: spare-writer'), 'downshift lands on the covered fitting lane');
+  const txt = readFileSync(join(proj, 'final.txt'), 'utf-8').trim();
+  assert.equal(txt, 'degrade-proven', 'downshifted lane completed the work');
+});
+
+test('degrade on empty: pause-with-resume-plan when reset is close (no silent death, no spend)', { timeout: 120000 }, async () => {
+  const h = home('degradepause');
+  mkdirSync(join(h.dir, 'lanes'), { recursive: true });
+  writeFileSync(join(h.dir, 'lanes', 'a.json'), JSON.stringify({
+    name: 'fast-writer', good_at: ['create', 'write'], cost: 'free', talks: 'terminal', proves: 'commands',
+    invoke: { kind: 'command', command: `/bin/sh ${join(ROOT, 'scripts/fixture-writer.sh')} {brief}` },
+  }));
+  const resetSoon = new Date(Date.now() + 2 * 3600e3).toISOString(); // <=6h away
+  await cli(h, 'meter', '--set', 'lane=fast-writer', '--provider', 'demo', '--quota', '1000', '--reset', resetSoon);
+  appendFileSync(join(h.dir, 'audit.log'), JSON.stringify({ kind: 'lane-call', lane: 'fast-writer', usage: { total_tokens: 1000 }, ok: true }) + '\n');
+  const proj = mkdtempSync(join(tmpdir(), 'degradepause-'));
+  writeFileSync(join(proj, 'package.json'), JSON.stringify({ name: 'p', scripts: { test: 'true' } }));
+  const r = await cli(h, 'go', 'create paused.txt containing the single line: x', '--cwd', proj);
+  assert.ok(r.stdout.includes('paused-with-resume-plan'), 'pauses rather than dying or spending');
+  const runs = readdirSync(join(h.dir, 'runs')).sort();
+  const rec = JSON.parse(readFileSync(join(h.dir, 'runs', runs[runs.length - 1], 'run.json'), 'utf-8'));
+  assert.equal(rec.status, 'resumed-brief');
+  assert.ok(!existsSync(join(proj, 'paused.txt')), 'no spend while paused');
 });

@@ -229,10 +229,15 @@ export async function cmdGo(args, flags, { cwd = process.cwd() } = {}) {
           // plan-router take: multi-tier fallback chain, included stops first
           roster.lanes = roster.lanes.filter((l) => l.name !== m.lane);
           const { buildChain, pickStop } = await import('../fallback.js');
-          const health = Object.fromEntries(roster.lanes.map((l) => [l.name, l.invoke?.status || 'ok']));
-          const pick = pickStop(buildChain(roster, 'builder', { budgetTokens }), { health });
+          // downshift only to lanes THIS loop can actually drive (a free lane
+          // with no driver is a dead stop, not a fallback)
+          const drivable = roster.lanes.filter((l) => l.invoke?.kind === 'command' || (l.invoke?.kind === 'mcp' && l.invoke?.command) || (['openai-compatible', 'http-chat', 'chat'].includes(l.invoke?.kind) && chatLaneAvailable(l)));
+          const undrivable = roster.lanes.filter((l) => !drivable.includes(l)).map((l) => l.name);
+          if (undrivable.length) appendLog(record.id, `CHAIN skipped undrivable lane(s): ${undrivable.join(', ')}`);
+          const health = Object.fromEntries(drivable.map((l) => [l.name, l.invoke?.status || 'ok']));
+          const pick = pickStop(buildChain({ lanes: drivable }, 'builder', { budgetTokens }), { health });
           if (pick.lane) {
-            byRole.builder = roster.lanes.find((l) => l.name === pick.lane);
+            byRole.builder = drivable.find((l) => l.name === pick.lane) || roster.lanes.find((l) => l.name === pick.lane);
             console.log(`chain · stop ${pick.stop}: ${pick.lane}${pick.rerouted ? ' (rerouted)' : ''}${pick.notes.length ? ' - ' + pick.notes.join('; ') : ''}`);
             appendLog(record.id, `CHAIN stop ${pick.stop}: ${pick.lane} ${pick.notes.join('; ')}`);
           } else {

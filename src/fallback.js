@@ -8,9 +8,18 @@ import { loadMeters, pacing, usageFromAudit } from './meters.js';
 // (free/plan/rollover), metered stops last, each capped by budget.
 export function buildChain(roster, role, { budgetTokens = Infinity } = {}) {
   const RANK = { free: 0, plan: 1, rollover: 2, metered: 3, coffee: 4 };
+  // Role-fit aware: within each cost tier, lanes whose good_at tags overlap the
+  // role's wanted tags come first - a downshift must land on a lane that can
+  // actually do the job, not merely the cheapest drivable process.
+  const { ROLE_TAGS } = { ROLE_TAGS: { builder: ['edits', 'tests', 'backend', 'ui', 'ide-grade', 'scaffold', 'draft', 'drafting', 'create', 'write', 'fixtures'] } };
+  const wanted = (ROLE_TAGS[role] || []);
+  const overlap = (l) => (l.good_at || []).filter((t) => wanted.includes(t)).length;
+  // a lane with TAGS THAT DON'T MATCH the role is an explicit misfit - excluded.
+  // A lane with NO tags at all is unjudged, not unfit - kept (generic fallback).
+  const tagged = (l) => Array.isArray(l.good_at) && l.good_at.length > 0;
   const scored = [...(roster.lanes || [])]
-    .filter((l) => l && l.name)
-    .sort((a, b) => (RANK[a.cost] ?? 9) - (RANK[b.cost] ?? 9));
+    .filter((l) => l && l.name && (!tagged(l) || overlap(l) > 0))
+    .sort((a, b) => (RANK[a.cost] ?? 9) - (RANK[b.cost] ?? 9) || overlap(b) - overlap(a));
   return scored.map((lane, i) => ({
     stop: i + 1,
     lane: lane.name,
