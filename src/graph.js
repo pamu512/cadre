@@ -86,3 +86,46 @@ export function blastRadius(map, files) {
 export function loadMapFor(root) {
   return loadMap(root || process.cwd());
 }
+
+// ---- graphify takes ----------------------------------------------------------
+// EXTRACTED vs INFERRED edges (donor: Graphify-Labs/graphify): every connection
+// carries a confidence tag so readers can tell what was read directly from
+// source (import statements) vs inferred by resolution (extension guesses).
+export function taggedEdges(map) {
+  const out = [];
+  for (const imp of map.imports || []) {
+    const target = norm(imp.spec, imp.from);
+    if (!target) continue;
+    const extracted = /\.[a-z]+$/.test(imp.spec);
+    out.push({ from: imp.from, to: target, spec: imp.spec, tag: extracted ? 'EXTRACTED' : 'INFERRED' });
+  }
+  return out;
+}
+
+// path query (donor: graphify `path A B`): shortest hop chain between two files
+// over the import graph, BFS, direction-agnostic.
+export function pathBetween(map, aRaw, bRaw) {
+  const edges = taggedEdges(map);
+  const a = aRaw.replace(/^\.\//, ''), b = bRaw.replace(/^\.\//, '');
+  const adj = new Map();
+  for (const e of edges) {
+    if (!adj.has(e.from)) adj.set(e.from, []);
+    if (!adj.has(e.to)) adj.set(e.to, []);
+    adj.get(e.from).push(e.to);
+    adj.get(e.to).push(e.from);
+  }
+  if (!adj.has(a) || !adj.has(b)) return { found: false, hops: [], note: 'one or both files have no import edges' };
+  const prev = new Map([[a, null]]);
+  const queue = [a];
+  while (queue.length) {
+    const cur = queue.shift();
+    if (cur === b) break;
+    for (const next of adj.get(cur) || []) {
+      if (!prev.has(next)) { prev.set(next, cur); queue.push(next); }
+    }
+  }
+  if (!prev.has(b)) return { found: false, hops: [], note: 'no path' };
+  const hops = [];
+  for (let cur = b; cur !== null; cur = prev.get(cur)) hops.unshift(cur);
+  return { found: true, hops, note: `${hops.length - 1} hop(s)` };
+}

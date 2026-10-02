@@ -541,3 +541,38 @@ test('meter preflight: empty lane within wait window pauses with resume plan', a
   const soon = new Date(Date.now() + 2 * 36e5).toISOString(); // resets in 2h <= 6h window
   assert.equal(pacing({ quota: 1000, resetAt: soon, used: 1000 }).state, 'empty');
 });
+
+// ---- donor takes: frugal (caveman/rtk), graph tags+paths (graphify) ---------
+test('frugal: compress, back up, never grow, count savings', async () => {
+  const { compressOutput } = await import(join(ROOT, 'src/frugal.js'));
+  const h = home('frugal');
+  const big = 'line\n'.repeat(5000) + '\n\n\n\n\n\n\n';
+  const c = compressOutput(big, { backupDir: join(h.dir, 'bk'), label: 't' });
+  assert.ok(c.saved > 0);
+  assert.ok(c.compressedBytes < c.originalBytes);
+  assert.ok(existsSync(join(h.dir, 'bk', 't.orig.txt')), 'caveman rule: original must be backed up');
+  assert.ok(c.text.length < big.length);
+  // rtk rule: tiny input never grows
+  const tiny = compressOutput('ok', {});
+  assert.equal(tiny.saved, 0);
+  assert.equal(tiny.text, 'ok');
+  // pathological cap with honest marker
+  const huge = compressOutput('z'.repeat(60000), {});
+  assert.ok(huge.compressedBytes <= 17000);
+  assert.ok(huge.text.includes('[frugal:'));
+});
+
+test('graphify takes: EXTRACTED/INFERRED edge tags + path queries', async () => {
+  const { buildIndex } = await import(join(ROOT, 'src/map.js'));
+  const { taggedEdges, pathBetween } = await import(join(ROOT, 'src/graph.js'));
+  const idx = buildIndex(ROOT);
+  const edges = taggedEdges(idx);
+  assert.ok(edges.length > 10);
+  assert.ok(edges.every((e) => ['EXTRACTED', 'INFERRED'].includes(e.tag)));
+  assert.ok(edges.some((e) => e.from === 'src/commands/approach.js' && e.to === 'src/scope.js'));
+  const p = pathBetween(idx, 'src/commands/approach.js', 'src/minimatch-lite.js');
+  assert.ok(p.found, 'path must exist');
+  assert.deepEqual(p.hops, ['src/commands/approach.js', 'src/scope.js', 'src/minimatch-lite.js']);
+  const none = pathBetween(idx, 'src/commands/approach.js', 'no/such/file.js');
+  assert.equal(none.found, false);
+});

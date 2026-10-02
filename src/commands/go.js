@@ -189,7 +189,11 @@ meteredTokens += (res.usage?.total_tokens || 0);
       console.log(`builder · ${builder.name} on the task`);
       const res = await invokeLane(builder, brief, { timeoutMs: 1000 * 60 * 30, override: Boolean(flags.override), context: flags.context });
       buildOutput = res.stdout || res.text || '';
-      appendLog(record.id, `BUILD (${builder.name}):\n${buildOutput.slice(0, 20000)}`);
+      // B5 frugal pipes: compress before the ledger; original backed up, savings counted
+      const { compressOutput } = await import('../frugal.js');
+      const frugal = compressOutput(buildOutput, { backupDir: join(home(), 'runs', record.id, 'frugal-backups'), label: 'build' });
+      buildOutput = frugal.text;
+      appendLog(record.id, `BUILD (${builder.name}) [frugal: ${frugal.originalBytes}→${frugal.compressedBytes} bytes, ${frugal.saved} saved${frugal.restorable ? ', original backed up' : ''}]:\n${buildOutput.slice(0, 20000)}`);
       console.log(buildOutput.split('\n').slice(-12).join('\n').replace(/^/gm, '  '));
       // citation: the ax run log, if the builder went through ax
       const axRun = /run-\d{8}-\d{6}/.exec(buildOutput);
