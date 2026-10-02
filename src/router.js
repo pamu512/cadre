@@ -1,9 +1,12 @@
 // router - roles go to whoever fits, not whoever's loyal.
 // Deterministic, explainable fit scoring over the roster + pins. No black box.
+// Scoring order (deliberate): demonstrated failure > capability > economics.
+//   A lane that keeps failing runs loses to a costlier lane that works —
+//   "free" is only free if the run passes the gate.
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { loadPins } from './store.js';
+import { loadPins, listRuns } from './store.js';
 
 export const ROLES = ['planner', 'builder', 'critic', 'verifier'];
 
@@ -37,6 +40,38 @@ function availabilityPenalty(lane) {
   return 5; // busy / down
 }
 
+// ---- history signal: a lane's recent pass rate from the ledger ----------------
+// Cached per process. Lanes with only failures get a heavy penalty; thin
+// history (< 2 settled runs) gives no signal either way.
+let _histCache = null;
+function laneHistory() {
+  if (_histCache) return _histCache;
+  const stats = new Map(); // lane -> { runs, passed }
+  try {
+    for (const r of listRuns()) {
+      if (!r.roles) continue;
+      if (!['passed', 'rejected', 'failed'].includes(r.status)) continue;
+      for (const lane of Object.values(r.roles)) {
+        const cur = stats.get(lane) || { runs: 0, passed: 0 };
+        cur.runs += 1;
+        if (r.status === 'passed') cur.passed += 1;
+        stats.set(lane, cur);
+      }
+    }
+  } catch { /* no ledger yet */ }
+  _histCache = stats;
+  return stats;
+}
+
+export function historyPenalty(lane) {
+  const h = laneHistory().get(lane.name);
+  if (!h || h.runs < 2) return 0; // not enough evidence
+  const passRate = h.passed / h.runs;
+  if (passRate >= 0.5) return 0;
+  if (passRate === 0) return 8; // demonstrated failure: free loses to working plan lanes
+  return 4; // struggling
+}
+
 export function scoreLane(lane, role) {
   const tags = lane.good_at || [];
   const wanted = ROLE_TAGS[role] || [];
@@ -46,12 +81,15 @@ export function scoreLane(lane, role) {
   const prefBonus = preferred > -1 ? 3 - Math.min(preferred, 2) : 0;
   const costRank = COST_RANK[lane.cost] ?? 3;
   const penalty = availabilityPenalty(lane);
-  const fit = overlap * 2 + prefBonus + (4 - costRank) - penalty;
+  const histPenalty = historyPenalty(lane);
+  const fit = overlap * 2 + prefBonus + (4 - costRank) - penalty - histPenalty;
+  const h = laneHistory().get(lane.name);
   const why = [
     `good_at ∩ ${role}: ${overlap}`,
     preferred > -1 ? `preferred for ${role}` : null,
     `cost ${lane.cost}`,
     penalty ? `status ${lane.invoke?.status}` : null,
+    histPenalty ? `history ${h.passed}/${h.runs} passed` : null,
   ].filter(Boolean).join(' · ');
   return { role, lane: lane.name, fit, why };
 }

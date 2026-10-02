@@ -163,3 +163,14 @@ test('gate: bogus citation ref fails the citations family; real ref passes', asy
   const http = gateVerdict({ ...base, evidence: [...base.evidence, { kind: 'citation', label: 'u', ref: 'https://example.com/x' }] });
   assert.ok(http.passed, 'http refs are followable, must pass');
 });
+
+// ---- history-aware routing ----------------------------------------------------
+test('router: demonstrated failure outranks free cost', async () => {
+  const { historyPenalty, scoreLane } = await import(join(ROOT, 'src/router.js'));
+  // fabricated ledger via penalty unit: a lane with 0 passes over 3 runs
+  const failing = { name: 'ollama-local', good_at: ['scaffold', 'draft', 'summarize'], cost: 'free', invoke: {} };
+  const p = historyPenalty(failing);
+  assert.ok(p >= 4, `failing lane must be penalized, got ${p}`);
+  const working = { name: 'nonexistent-lane-xyz', good_at: ['edits'], cost: 'plan', invoke: {} };
+  assert.equal(historyPenalty(working), 0, 'no history = no penalty');
+});
