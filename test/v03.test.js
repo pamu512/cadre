@@ -448,3 +448,31 @@ test('parity: issue-cited behaviors trace to real issues (gh), nonexistent stay 
   const fake = await runBehaviorCheckAsync('the crash from #999999 is fixed', ROOT, { ghRepo: 'NousResearch/hermes-agent' });
   assert.ok(!fake.closed && /not found/.test(fake.reason), 'fake issue stays open');
 });
+
+test('taskclass: deterministic/judgment/mixed classification and role-aware cost policy', async () => {
+  const { classifyTask, costPolicyFor } = await import(join(ROOT, 'src/taskclass.js'));
+  assert.equal(classifyTask('create hello.txt and format the files').class, 'deterministic');
+  assert.equal(classifyTask('design the architecture and review the tradeoffs').class, 'judgment');
+  // mixed: both signals
+  const m = classifyTask('create the docs AND analyze the risk tradeoffs');
+  assert.equal(m.class, 'mixed');
+  // role-aware policy under mixed
+  assert.equal(costPolicyFor(m, 'builder'), 'free-first');
+  assert.equal(costPolicyFor(m, 'critic'), 'capability-first');
+  assert.equal(costPolicyFor('deterministic', 'builder'), 'free-first');
+  assert.equal(costPolicyFor('judgment', 'builder'), 'capability-first');
+});
+
+test('router: task class moves routing - free lanes win deterministic, frontier wins judgment', async () => {
+  const { scoreLane } = await import(join(ROOT, 'src/router.js'));
+  const free = { name: 'f', good_at: ['edits', 'tests'], cost: 'free', invoke: {} };
+  const frontier = { name: 'p', good_at: ['edits', 'tests'], cost: 'plan', invoke: {} };
+  const det = scoreLane(free, 'builder', { class: 'deterministic' });
+  const detP = scoreLane(frontier, 'builder', { class: 'deterministic' });
+  const jud = scoreLane(frontier, 'builder', { class: 'judgment' });
+  const judF = scoreLane(free, 'builder', { class: 'judgment' });
+  assert.ok(det.fit > detP.fit, 'deterministic: free lane outranks plan lane');
+  assert.ok(jud.fit > judF.fit, 'judgment: frontier lane outranks free lane');
+  assert.ok(det.why.includes('cheap preferred'), 'policy stated in why line');
+  assert.ok(jud.why.includes('frontier preferred'), 'policy stated in why line');
+});

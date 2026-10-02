@@ -29,10 +29,16 @@ export async function cmdPlan(args, flags) {
   // bench ranking (PRD 6.4): accuracy-per-dollar from real gated history —
   // lanes that produced passing gated runs rank above untested lanes; among
   // tested, fewer metered tokens per pass wins. History is the bench, no synthetic numbers.
+  // Task-class aware (the contract): FOR THIS TASK CLASS - runs whose brief
+  // classifies the same way as this one count toward the ranking; other runs
+  // are excluded so a lane great at scaffolds doesn't inherit a review rank.
   const { listRuns } = await import('../store.js');
+  const { classifyTask } = await import('../taskclass.js');
+  const myClass = classifyTask(task).class;
   const history = listRuns().filter((r) => r.status === 'passed' && r.roles);
   const stats = new Map();
   for (const r of history) {
+    if (classifyTask(r.brief || '').class !== myClass) continue; // THIS task class only
     for (const lane of Object.values(r.roles || {})) {
       const cur = stats.get(lane) || { passed: 0, tokens: 0 };
       cur.passed += 1;
@@ -75,7 +81,7 @@ export async function cmdPlan(args, flags) {
     console.log(`\nexpected metered ~${meteredTokens} tok vs budget cap ${pins.budget} tok: ${fits ? 'fits' : 'OVER CAP - router will downshift or park metered lanes'}`);
   }
 
-  console.log('\nbench (accuracy-per-dollar from real gated history):');
+  console.log(`\nbench (accuracy-per-dollar from real gated history · task class: ${myClass}${['deterministic', 'mixed'].includes(myClass) ? ' - same-class runs only' : ''}):`);
   for (const { lane, s } of ranked.slice(0, 8)) {
     if (s) console.log(`  ${lane.name.padEnd(16)} ${s.passed} passed run(s) · ${s.tokens} metered tok · ${(rankScore(s)).toFixed(1)} passes/10k-tok`);
     else console.log(`  ${lane.name.padEnd(16)} untested - no gated history yet`);

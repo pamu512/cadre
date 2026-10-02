@@ -9,6 +9,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { loadPins, listRuns } from './store.js';
+import { classifyTask, costPolicyFor } from './taskclass.js';
 
 export const ROLES = ['planner', 'builder', 'critic', 'verifier'];
 
@@ -74,7 +75,7 @@ export function historyPenalty(lane, injectedHistory = null) {
   return 4; // struggling
 }
 
-export function scoreLane(lane, role) {
+export function scoreLane(lane, role, taskClass = null) {
   const tags = lane.good_at || [];
   const wanted = ROLE_TAGS[role] || [];
   let overlap = tags.filter((t) => wanted.includes(t)).length;
@@ -83,7 +84,17 @@ export function scoreLane(lane, role) {
   const prefBonus = preferred > -1 ? 3 - Math.min(preferred, 2) : 0;
   const penalty = availabilityPenalty(lane);
   const histPenalty = historyPenalty(lane);
-  const fit = overlap * 2 + prefBonus - penalty - histPenalty;
+  // task-class policy (the bench's contract): deterministic work gets cheap/
+  // local preference, judgment work gets frontier preference. Stated, not
+  // silent: the why line names the policy that moved the score.
+  let classAdj = 0;
+  let classNote = null;
+  const policy = costPolicyFor(taskClass, role);
+  if (policy === 'free-first' && (lane.cost === 'free' || lane.cost === 'local')) { classAdj = 2; classNote = 'task deterministic · cheap preferred'; }
+  else if (policy === 'free-first' && lane.cost === 'metered') { classAdj = -2; classNote = 'task deterministic · metered penalized'; }
+  else if (policy === 'capability-first' && (lane.cost === 'metered' || lane.cost === 'plan')) { classAdj = 2; classNote = 'task judgment · frontier preferred'; }
+  else if (policy === 'capability-first' && lane.cost === 'free') { classAdj = -1; classNote = 'task judgment · free lane discounted'; }
+  const fit = overlap * 2 + prefBonus - penalty - histPenalty + classAdj;
   const h = laneHistory().get(lane.name);
   const why = [
     `good_at ∩ ${role}: ${overlap}`,
@@ -91,6 +102,7 @@ export function scoreLane(lane, role) {
     `cost ${lane.cost}`,
     penalty ? `status ${lane.invoke?.status}` : null,
     histPenalty ? `history ${h.passed}/${h.runs} passed` : null,
+    classNote,
   ].filter(Boolean).join(' · ');
   return { role, lane: lane.name, fit, costRank: COST_RANK[lane.cost] ?? 3, why };
 }
@@ -100,6 +112,8 @@ export function assignRoles(roster, { brief = '' } = {}) {
   const pins = loadPins();
   const assignments = [];
   const used = new Set();
+  const task = classifyTask(brief);
+  assignments.taskClass = task; // surfaced by explainRouting
 
   for (const role of ROLES) {
     const pinned = pins.roles?.[role];
@@ -113,7 +127,7 @@ export function assignRoles(roster, { brief = '' } = {}) {
     if (assignments.some((a) => a.role === role)) continue;
     const scored = roster.lanes
       .filter((l) => !used.has(l.name))
-      .map((l) => scoreLane(l, role))
+      .map((l) => scoreLane(l, role, task))
       .filter((s) => s.fit > 0)
       .sort((a, b) => b.fit - a.fit || a.costRank - b.costRank); // fit first, cost only breaks ties
     if (scored.length === 0) {
