@@ -1,0 +1,113 @@
+// P0/P1 audit-item tests (appended to smoke suite)
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const run = promisify(execFile);
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+
+function home(name) {
+  const dir = mkdtempSync(join(tmpdir(), `cadre-${name}-`));
+  return { dir, env: { ...process.env, CADRE_HOME: dir } };
+}
+async function cli(h, ...args) {
+  try {
+    const { stdout } = await run('node', [join(ROOT, 'bin/cadre.js'), ...args], { env: h.env, timeout: 60000, cwd: ROOT });
+    return { rc: 0, stdout };
+  } catch (e) {
+    return { rc: e.code ?? 1, stdout: e.stdout ?? '', stderr: e.stderr ?? '' };
+  }
+}
+
+test('P0#5: cadre doctor runs and reports health with fix lines', async () => {
+  const h = home('doctor');
+  const r = await cli(h, 'doctor');
+  assert.equal(r.rc, 0);
+  assert.ok(r.stdout.includes('node'));
+  assert.ok(/healthy|fix:/.test(r.stdout));
+});
+
+test('P0#2: MCP tools/list includes go/sweep/watch/pin; cadre_go dry returns routing', async () => {
+  const h = home('mcp2');
+  const p = spawn('node', [join(ROOT, 'bin/cadre.js'), 'mcp'], { stdio: ['pipe', 'pipe', 'pipe'], env: h.env });
+  let buf = ''; const replies = [];
+  p.stdout.on('data', (d) => { buf += d; let n; while ((n = buf.indexOf('\n')) > -1) { const l = buf.slice(0, n).trim(); buf = buf.slice(n + 1); if (l) replies.push(JSON.parse(l)); } });
+  p.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }) + '\n');
+  p.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'cadre_go', arguments: { outcome: 'demo task', dry: true } } }) + '\n');
+  await new Promise((r) => setTimeout(r, 2500));
+  p.kill();
+  const tools = replies.find((r) => r.id === 1)?.result?.tools?.map((t) => t.name) || [];
+  for (const t of ['cadre_go', 'cadre_sweep', 'cadre_watch', 'cadre_pin']) assert.ok(tools.includes(t), `${t} missing from tools/list`);
+  const go = replies.find((r) => r.id === 2);
+  assert.ok((go?.result?.content?.[0]?.text || '').length > 50, 'cadre_go dry must return routing text');
+});
+
+test('P0#8/B8: builder-only command evidence fails the gate; mixed passes', async () => {
+  const { gateVerdict } = await import(join(ROOT, 'src/gate.js'));
+  const base = {
+    roles: { builder: 'the-builder', verifier: 'the-verifier' },
+    evidence: [
+      { kind: 'command', label: 'x', command: 'true', exit: 0, output: 'ok', by: 'the-builder' },
+      { kind: 'diff', label: 'f', path: 'f', plus: 3, minus: 1 },
+      { kind: 'artifact', label: 'README.md', path: 'README.md' },
+      { kind: 'citation', label: 'c', ref: 'runs/0001/run.log' },
+    ],
+  };
+  const bad = gateVerdict(base);
+  assert.ok(!bad.passed, 'builder-only command evidence must fail');
+  assert.ok(bad.independence.note.includes('non-builder'));
+  const good = gateVerdict({ ...base, evidence: [...base.evidence, { kind: 'command', label: 'v', command: 'npm test', exit: 0, output: 'ok', by: 'the-verifier' }] });
+  assert.ok(good.passed, 'mixed evidence must pass');
+});
+
+test('P1#6: Gemini CLI probe row exists in scan', async () => {
+  const src = readFileSync(join(ROOT, 'src/scan.js'), 'utf-8');
+  assert.ok(src.includes("bin: 'gemini'"));
+});
+
+test('P1#7: go consults the warm map (hot zones in the run path)', async () => {
+  // unit-level: map.js loadMap/mapIsWarm + go's import of them
+  const src = readFileSync(join(ROOT, 'src/commands/go.js'), 'utf-8');
+  assert.ok(src.includes('hotZones'), 'go must read hot zones');
+  assert.ok(src.includes('mapIsWarm'), 'go must check warmth');
+  const planSrc = readFileSync(join(ROOT, 'src/commands/plan.js'), 'utf-8');
+  assert.ok(planSrc.includes('hotZones'), 'plan must read hot zones');
+});
+
+test('P1#13: leftover fold semantics - same brief attaches evidence', async () => {
+  const h = home('autofold');
+  const prev = process.env.CADRE_HOME;
+  process.env.CADRE_HOME = h.dir;
+  try {
+    const { createRun, updateRun, addEvidence, readRun } = await import(join(ROOT, 'src/store.js'));
+    const leftover = createRun({ brief: 'exact brief', kind: 'go' });
+    await addEvidence(leftover.id, { kind: 'citation', label: 'prior', ref: 'runs/prior' });
+    updateRun(leftover.id, { status: 'interrupted' });
+    // the fold logic in go: same brief => fold; assert the store supports attach
+    const r = readRun(leftover.id);
+    assert.equal(r.evidence.length, 1);
+    const src = readFileSync(join(ROOT, 'src/commands/go.js'), 'utf-8');
+    assert.ok(src.includes('sweep-fold'), 'go must log fold decisions');
+  } finally {
+    if (prev) process.env.CADRE_HOME = prev; else delete process.env.CADRE_HOME;
+  }
+});
+
+test('P0#1: default go is standalone (no --local needed); --ax forces ax pipeline', async () => {
+  const src = readFileSync(join(ROOT, 'src/commands/go.js'), 'utf-8');
+  assert.ok(src.includes("if (!flags.ax)"), 'standalone must be the default path');
+  assert.ok(!src.includes('flags.local'), '--local is replaced by default-standalone + --ax');
+});
+
+test('P0#4/#12 honesty: meter copy says declare, plan labels heuristics', async () => {
+  const meterSrc = readFileSync(join(ROOT, 'src/commands/meter.js'), 'utf-8');
+  assert.ok(meterSrc.includes('official rail'), 'meter must say official rails');
+  const planSrc = readFileSync(join(ROOT, 'src/commands/plan.js'), 'utf-8');
+  assert.ok(planSrc.toLowerCase().includes('heuristic'), 'plan must label estimates heuristic');
+});

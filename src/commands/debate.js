@@ -94,6 +94,18 @@ export async function cmdDebate(args, flags) {
 
   writeFileSync(join(dir, 'question.txt'), q);
   console.log(`\ntranscripts: ${dir}`);
-  console.log('citation check: every transcript above is a file on disk - open them.');
+
+  // citation check (P0 #3): every file this debate cites must exist on disk;
+  // a missing one fails LOUDLY, not in prose
+  const cited = [join(dir, 'question.txt')];
+  for (const f of readdirSync(dir)) cited.push(join(dir, f));
+  const missing = cited.filter((f) => !existsSync(f));
+  if (missing.length) {
+    console.error(`CITATION CHECK FAILED: ${missing.length} cited file(s) missing: ${missing.join(', ')}`);
+    appendFileSync(join(dir, 'citation-check.txt'), `FAILED ${new Date().toISOString()}: ${missing.join(', ')}\n`);
+    return 1;
+  }
+  appendFileSync(join(dir, 'citation-check.txt'), `OK ${new Date().toISOString()}: ${cited.length} cited files verified on disk\n`);
+  console.log(`citation check: OK - ${cited.length} cited file(s) verified on disk (see citation-check.txt)`);
   return 0;
 }

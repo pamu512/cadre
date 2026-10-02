@@ -77,15 +77,36 @@ export function gateVerdict(runRecord, { cwd = process.cwd() } = {}) {
     }
   }
 
-  const passed = missing.length === 0 && failed.length === 0;
+  // B8 verifier independence: a run cannot pass when ALL its command evidence
+  // comes from the builder's own transcript. Require at least one command-
+  // family evidence item produced by a non-builder role (verifier/critic),
+  // when roles are recorded.
+  let independenceOk = true;
+  let independenceNote = 'n/a (no roles recorded)';
+  const roles = runRecord.roles || {};
+  if (roles.builder) {
+    const nonBuilders = Object.entries(roles).filter(([r]) => r !== 'builder').map(([, l]) => l);
+    const builderCmds = (runRecord.evidence || []).filter((e) => e.kind === 'command' && e.by === roles.builder);
+    const otherCmds = (runRecord.evidence || []).filter((e) => e.kind === 'command' && (!e.by || (nonBuilders.includes(e.by))));
+    const anyCmds = (runRecord.evidence || []).filter((e) => e.kind === 'command');
+    if (anyCmds.length > 0 && otherCmds.length === 0) {
+      independenceOk = false;
+      independenceNote = 'all command evidence is builder-produced; need at least one non-builder command (verifier/critic)';
+    } else {
+      independenceNote = otherCmds.length > 0 ? `${otherCmds.length} non-builder command evidence` : 'no command evidence';
+    }
+  }
+
+  const passed = missing.length === 0 && failed.length === 0 && independenceOk;
   return {
     passed,
     missing,
     failed,
     checks,
+    independence: { ok: independenceOk, note: independenceNote },
     summary: passed
       ? 'all four evidence families present and verified'
-      : `missing: ${missing.join(', ') || 'none'}; failed: ${failed.length}`,
+      : `missing: ${missing.join(', ') || 'none'}; failed: ${failed.length}${independenceOk ? '' : `; independence: ${independenceNote}`}`,
   };
 }
 

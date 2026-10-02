@@ -62,13 +62,37 @@ export async function cmdGo(args, flags, { cwd = process.cwd() } = {}) {
     return 0;
   }
 
-  // sweep-on-start: surface leftovers before spending anything
+  // sweep-on-start (#13): fold compatible leftovers into this run (same brief
+  // text = compatible; their evidence attaches), retire the rest is NOT done
+  // here - incompatible leftovers stay for cadre sweep.
   const leftovers = listRuns().filter((r) => ['running', 'interrupted'].includes(r.status));
   if (leftovers.length > 0) {
-    console.log(`sweep · ${leftovers.length} leftover run(s) noted: ${leftovers.map((l) => l.id).join(', ')} (cadre sweep to triage)`);
+    const compatible = leftovers.filter((l) => l.brief === brief);
+    const incompatible = leftovers.filter((l) => l.brief !== brief);
+    for (const l of compatible) {
+      console.log(`sweep · folding leftover ${l.id} into this run (same brief; ${((l.evidence || []).length)} evidence item(s) attach)`);
+      for (const ev of l.evidence || []) await addEvidence(record.id, { ...ev, foldedFrom: l.id });
+      updateRun(l.id, { status: 'retired', ended: new Date().toISOString(), verdict: { passed: false, summary: `folded into run ${record.id}` } });
+      audit({ kind: 'sweep-fold', from: l.id, into: record.id });
+    }
+    if (incompatible.length) {
+      console.log(`sweep · ${incompatible.length} incompatible leftover(s) left for cadre sweep: ${incompatible.map((l) => l.id).join(', ')}`);
+    }
   }
 
   const roster = await buildRoster();
+  // B4/P0 #7: warm map feeds routing - hot-zone files hint which lanes fit
+  let hotHint = '';
+  try {
+    const { loadMap, mapIsWarm } = await import('../map.js');
+    const m = loadMap(cwd);
+    if (m && mapIsWarm(m) && (m.hotZones || []).length) {
+      const hot = m.hotZones.slice(0, 3).map((h) => h.path).join(', ');
+      hotHint = hot;
+      appendLog(record.id, `MAP hot zones: ${hot}`);
+      console.log(`map · warm - hot zones: ${hot}`);
+    }
+  } catch { /* map is a hint, never a dependency */ }
   const routing = assignRoles(roster, { brief });
   // scope lock (PRD 6.6): manifest before work breathes
   const manifest = buildScopeManifest({ brief, scope: flags.scope, cwd });
@@ -97,18 +121,19 @@ export async function cmdGo(args, flags, { cwd = process.cwd() } = {}) {
 
   const byRole = Object.fromEntries(routing.assignments.map((a) => [a.role, roster.lanes.find((l) => l.name === a.lane)]));
 
-  // B2 --local: standalone loop — ax is just another adapter, not the default.
-  // Prefer a non-ax builder: a user command-kind lane, else a keyed chat lane.
-  if (flags.local) {
+  // Default loop is STANDALONE (P0 #1): prefer a non-ax builder — a user
+  // command-kind lane, else a keyed chat lane. ax is one adapter, not the
+  // default path; `--ax` forces the old ax-wrapped behavior.
+  if (!flags.ax) {
     const userCmd = roster.lanes.find((l) => l.invoke?.kind === 'command');
     const chatL = roster.lanes.find((l) => ['openai-compatible', 'http-chat', 'chat'].includes(l.invoke?.kind) && chatLaneAvailable(l));
     if (userCmd || chatL) {
       byRole.builder = userCmd || chatL;
-      appendLog(record.id, `LOCAL loop: builder=${byRole.builder.name} (ax skipped by --local)`);
-      console.log(`local · builder=${byRole.builder.name} (ax bypassed)`);
+      appendLog(record.id, `LOCAL loop: builder=${byRole.builder.name} (standalone default)`);
+      console.log(`local · builder=${byRole.builder.name} (standalone loop; --ax forces the ax pipeline)`);
     } else {
       console.log('local · no non-ax builder available (no command-kind user lane, no keyed chat lane) - falling back to ax routing');
-      appendLog(record.id, 'LOCAL loop: no non-ax builder, ax kept');
+      appendLog(record.id, 'LOCAL loop: no non-ax builder, ax kept as fallback');
     }
   }
 
@@ -275,11 +300,11 @@ meteredTokens += (res.usage?.total_tokens || 0);
   if (test) {
     try {
       const { stdout } = await run(test.cmd, test.args, { cwd, timeout: 1000 * 60 * 10, maxBuffer: 1024 * 1024 * 16 });
-      verifyEv = { kind: 'command', label: test.label, command: `${test.cmd} ${test.args.join(' ')}`, argv: [test.cmd, ...test.args], exit: 0, output: stdout.slice(0, 4000) };
+      verifyEv = { kind: 'command', label: test.label, by: 'verifier', command: `${test.cmd} ${test.args.join(' ')}`, argv: [test.cmd, ...test.args], exit: 0, output: stdout.slice(0, 4000) };
       console.log(`verifier · ${test.label} ✓`);
       appendLog(record.id, `VERIFY ${test.label} exit 0:\n${stdout.slice(0, 4000)}`);
     } catch (e) {
-      verifyEv = { kind: 'command', label: test.label, command: `${test.cmd} ${test.args.join(' ')}`, argv: [test.cmd, ...test.args], exit: e.code ?? 1, output: String(e.stdout || e.message).slice(0, 4000) };
+      verifyEv = { kind: 'command', label: test.label, by: 'verifier', command: `${test.cmd} ${test.args.join(' ')}`, argv: [test.cmd, ...test.args], exit: e.code ?? 1, output: String(e.stdout || e.message).slice(0, 4000) };
       console.error(`verifier · ${test.label} ✗ (exit ${e.code ?? 1})`);
       appendLog(record.id, `VERIFY ${test.label} FAILED:\n${String(e.stdout || e.message).slice(0, 4000)}`);
     }

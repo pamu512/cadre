@@ -7,6 +7,10 @@ import { cmdPlan } from './plan.js';
 import { cmdMap } from './map.js';
 import { cmdProof } from './proof.js';
 import { cmdMeter } from './meter.js';
+import { cmdGo } from './go.js';
+import { cmdSweep } from './sweep.js';
+import { cmdWatch } from './watch.js';
+import { cmdPin } from './pin.js';
 
 const SERVER = { name: 'cadre', version: '0.2.0' };
 
@@ -41,6 +45,39 @@ const TOOLS = [
     description: 'Show real metered usage recorded so far (chat-lane call receipts from the audit log) and open runs.',
     inputSchema: { type: 'object', properties: {} },
   },
+  {
+    name: 'cadre_go',
+    description: 'Run the loop for an outcome (scan -> route -> plan -> build -> critique -> verify -> gate). Use dry=true to see routing without spending.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        outcome: { type: 'string' },
+        dry: { type: 'boolean', description: 'plan only, no spend' },
+        scope: { type: 'string', description: 'scope lock glob; changes outside it reject the run' },
+        ax: { type: 'boolean', description: 'force the ax-wrapped pipeline instead of the standalone loop' },
+      },
+      required: ['outcome'],
+    },
+  },
+  {
+    name: 'cadre_sweep', description: 'Find leftover (interrupted/stale) runs and their dispositions.',
+    inputSchema: { type: 'object', properties: { all: { type: 'boolean' } } },
+  },
+  {
+    name: 'cadre_watch', description: 'Tail a run log (or replay it if settled).',
+    inputSchema: { type: 'object', properties: { run: { type: 'string' }, replay: { type: 'boolean' } }, required: ['run'] },
+  },
+  {
+    name: 'cadre_pin', description: 'Show or set guardrails: role pins, token budget, quiet hours.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        role: { type: 'string', description: '<role>=<lane>' },
+        budget: { type: 'number' },
+        quiet: { type: 'string', description: 'HH:MM-HH:MM' },
+      },
+    },
+  },
 ];
 
 function send(msg) {
@@ -58,6 +95,10 @@ async function callTool(name, args) {
     else if (name === 'cadre_map') rc = args.symbol ? await cmdMap([], { why: String(args.symbol) }) : await cmdMap([], {});
     else if (name === 'cadre_proof') rc = await cmdProof(args.run ? [String(args.run)] : [], {});
     else if (name === 'cadre_meter') rc = await cmdMeter([], {});
+    else if (name === 'cadre_go') rc = await cmdGo([String(args.outcome || '')], { dry: Boolean(args.dry), scope: args.scope, ax: Boolean(args.ax) });
+    else if (name === 'cadre_sweep') rc = await cmdSweep([], { all: Boolean(args.all) });
+    else if (name === 'cadre_watch') rc = await cmdWatch([String(args.run || '')], { replay: Boolean(args.replay), timeout: '5' });
+    else if (name === 'cadre_pin') rc = await cmdPin([], { role: args.role, budget: args.budget, quiet: args.quiet });
     else return { error: { code: -32601, message: `unknown tool: ${name}` } };
     return { content: [{ type: 'text', text: capture.join('\n') || '(no output)' }], structuredContent: { exit: rc } };
   } finally {

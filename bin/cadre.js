@@ -12,6 +12,7 @@ import { cmdWatch } from '../src/commands/watch.js';
 import { cmdProof } from '../src/commands/proof.js';
 import { cmdMetrics } from '../src/commands/metrics.js';
 import { cmdApproach } from '../src/commands/approach.js';
+import { cmdDoctor } from '../src/commands/doctor.js';
 import { cmdDebate } from '../src/commands/debate.js';
 import { cmdPin } from '../src/commands/pin.js';
 import { cmdMcp } from '../src/commands/mcp.js';
@@ -88,6 +89,7 @@ async function main() {
     case 'proof': return cmdProof(_, flags);
     case 'metrics': return cmdMetrics(_, flags);
     case 'approach': return cmdApproach(_, flags);
+    case 'doctor': return cmdDoctor(_, flags);
     case 'debate': return cmdDebate(_, flags);
     case 'pin': return cmdPin(_, flags);
     case 'mcp': return cmdMcp(_, flags);

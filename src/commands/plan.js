@@ -16,6 +16,14 @@ export async function cmdPlan(args, flags) {
     return 2;
   }
   const roster = await buildRoster();
+  // warm map hint (P0 #7): hot zones shown before routing
+  try {
+    const { loadMap, mapIsWarm } = await import('../map.js');
+    const m = loadMap(process.cwd());
+    if (m && mapIsWarm(m) && (m.hotZones || []).length) {
+      console.log(`map · warm - hot zones: ${m.hotZones.slice(0, 3).map((h) => h.path).join(', ')}`);
+    }
+  } catch { /* hint only */ }
   const routing = assignRoles(roster, { brief: task });
 
   // bench ranking (PRD 6.4): accuracy-per-dollar from real gated history —

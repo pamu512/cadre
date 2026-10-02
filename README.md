@@ -13,6 +13,7 @@ before stamping anything, and anything not wired says so and exits 2.
 |---|---|
 | `cadre go "<outcome>"` | Scans the roster, routes roles, plans, builds via `ax build`, critiques, runs the project test command, gates on evidence, files the run under `$CADRE_HOME/runs/<id>` |
 | `cadre go --dry` | Same routing + pipeline, spends nothing |
+| `cadre doctor` | Cold-machine preflight: node, ax, lanes, env keys, test command — one fix line per problem |
 | `cadre lanes [--json]` | Live roster: `ax lanes` registry + env-keyed API lanes + local Ollama probe + your `$CADRE_HOME/lanes/*.json`, validated against the contract |
 | `cadre plan "<task>"` | Real routing for the task + heuristic token estimates (labeled heuristic; no dollar figures) |
 | `cadre meter` | Real usage from run records: call receipts from `audit.log`, run statuses, budget pin |
@@ -51,6 +52,12 @@ npm test          # node --test; contract + smoke suites
 
 ## Status
 
-Experiment stage. Honest limits: `go` build quality is ax's; `map` is a
-regex-symbol index, not a semantic AST; `debate` transcripts are the citation
-record; MCP exposes read-only tools (no `go` through MCP yet).
+Experiment stage. `cadre doctor` preflights a cold machine (one fix line per
+problem). The default `go` loop is standalone — any command-kind user lane or
+keyed OpenAI-compatible chat lane builds without ax; `--ax` forces the ax
+pipeline. MCP exposes 10 tools including `go` (dry) , `sweep`, `watch`, `pin`.
+Debate runs a citation check (cited files verified on disk; failures exit 1).
+`map` is a regex-symbol index (not a semantic AST) with a warm cache consulted
+by `go`/`plan`. `meter` is declare-your-official-rails + real burn — no
+scraping. Honest limits: no `npx` publish yet (`npm i -g` from a clone works);
+routing history is thin until gated runs accumulate.

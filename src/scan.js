@@ -19,6 +19,7 @@ const CLI_PROBES = [
   { bin: 'claude', label: 'Claude Code' },
   { bin: 'cursor', label: 'Cursor Agent CLI' },
   { bin: 'codex', label: 'Codex CLI' },
+  { bin: 'gemini', label: 'Gemini CLI' },
   { bin: 'gh', label: 'GitHub CLI' },
   { bin: 'docker', label: 'Docker' },
 ];
