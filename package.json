@@ -1,7 +1,7 @@
 {
   "name": "cadre",
   "version": "0.2.0",
-  "description": "Cadre — a model/bot-agnostic agent harness. Any model, any bot, one command. (experiment; wraps ax)",
+  "description": "Cadre \u2014 a model/bot-agnostic agent harness. Any model, any bot, one command. (experiment; wraps ax)",
   "private": true,
   "type": "module",
   "bin": {
@@ -13,5 +13,15 @@
   "scripts": {
     "test": "node --test"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "files": [
+    "bin/",
+    "src/",
+    "schemas/",
+    "examples/",
+    "scripts/fixture-writer.sh",
+    "scripts/loop-watchdog.sh",
+    "docs/PRD-v0.3.md",
+    "README.md"
+  ]
 }

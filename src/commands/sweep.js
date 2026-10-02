@@ -7,6 +7,7 @@ import { listRuns, updateRun, home, tryReadRun, runDir, lockPath, hasLock, readR
 import { audit } from '../store.js';
 import { writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { homedir } from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
@@ -44,6 +45,30 @@ function snapshot(id) {
 }
 
 export async function cmdSweep(args, flags) {
+  // C6: --release frees stale ax registry claims (killed builds leave
+  // auto-claimed orphans that block re-runs until released)
+  if (flags.release) {
+    const AX = process.env.CADRE_AX || join(homedir(), '.local/bin/ax');
+    if (!existsSync(AX)) { console.error('cadre: ax not found - nothing to release'); return 1; }
+    try {
+      const { stdout } = await run(AX, ['work', 'list'], { timeout: 15000 });
+      const active = stdout.split('\n').filter((l) => /\[active\]/.test(l));
+      if (active.length === 0) { console.log('no [active] registry entries - nothing to release'); return 0; }
+      let n = 0;
+      for (const line of active) {
+        const m = /\s(w-\S+)\s/.exec(line);
+        if (!m) continue;
+        try { await run(AX, ['work', 'release', '--id', m[1]], { timeout: 15000 }); console.log(`released ${m[1]}`); n++; }
+        catch (e) { console.log(`could not release ${m[1]}: ${String(e.message).split('\n')[0]}`); }
+      }
+      audit({ kind: 'sweep-release', count: n });
+      return n === active.length ? 0 : 1;
+    } catch (e) {
+      console.error(`cadre: ax work list failed: ${String(e.message).split('\n')[0]}`);
+      return 1;
+    }
+  }
+
   if (flags.retire) {
     const id = String(flags.retire);
     const run = listRuns().find((r) => r.id === id);

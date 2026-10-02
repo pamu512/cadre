@@ -8,6 +8,23 @@ export async function cmdLanes(flags) {
   const roster = await buildRoster();
   const lanes = roster.lanes;
 
+  // C8: history made visible - per-lane settled/pass counts from the ledger
+  const { listRuns } = await import('../store.js');
+  const stats = new Map();
+  for (const r of listRuns()) {
+    if (!r.roles || !['passed', 'rejected', 'failed'].includes(r.status)) continue;
+    for (const lane of Object.values(r.roles)) {
+      const cur = stats.get(lane) || { runs: 0, passed: 0 };
+      cur.runs += 1;
+      if (r.status === 'passed') cur.passed += 1;
+      stats.set(lane, cur);
+    }
+  }
+  for (const l of lanes) {
+    const st = stats.get(l.name);
+    if (st) l.history = `${st.passed}/${st.runs} passed`;
+  }
+
   if (flags.json) {
     console.log(JSON.stringify({
       lanes,
@@ -28,7 +45,7 @@ export async function cmdLanes(flags) {
   for (const l of lanes) {
     const status = l.invoke?.status || 'ready';
     console.log(
-      `${w(l.name, 14)}${w(status, 9)}${w(l.good_at.join(', '), 30)}${w(l.cost, 9)}${w(l.talks, 10)}${l.proves}`
+      `${w(l.name, 14)}${w(status, 9)}${w(l.good_at.join(', '), 30)}${w(l.cost, 9)}${w(l.talks, 10)}${w(l.proves, 14)}${l.history || '—'}`
     );
   }
   const clis = roster.clis.map((c) => c.label).join(', ');

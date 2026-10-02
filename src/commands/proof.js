@@ -104,7 +104,7 @@ export async function cmdProof(args, flags) {
       }
     }
     console.log(fails === 0 ? '    ✓ bundle verified against reality' : `    ✗ ${fails} verification failure(s)`);
-    return fails === 0 ? 0 : 1;
+    return fails === 0 ? 0 : 3; // 3 = bundle failed reality checks (distinct from 1 = run not passed)
   }
 
   if (run.usage && Object.keys(run.usage).length) {

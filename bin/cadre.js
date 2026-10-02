@@ -13,6 +13,7 @@ import { cmdProof } from '../src/commands/proof.js';
 import { cmdMetrics } from '../src/commands/metrics.js';
 import { cmdApproach } from '../src/commands/approach.js';
 import { cmdDoctor } from '../src/commands/doctor.js';
+import { cmdInit } from '../src/commands/init.js';
 import { cmdDebate } from '../src/commands/debate.js';
 import { cmdPin } from '../src/commands/pin.js';
 import { cmdMcp } from '../src/commands/mcp.js';
@@ -50,6 +51,7 @@ function parseArgv(argv) {
 // Ctrl-C = safe stop: nothing lost. Every run carries its own lock + ledger, so
 // an interrupted run is a filed state sweep picks up - never a corrupted one.
 import { updateRun as _updateRun } from '../src/store.js';
+import { readFileSync } from 'node:fs';
 const getActiveRun = () => globalThis.CADRE_ACTIVE_RUN || null;
 process.on('SIGINT', () => {
   console.log('\ncadre: interrupted - stopping. Nothing is lost.');
@@ -80,6 +82,12 @@ async function main() {
     case 'help':
     case '--help':
     case '-h': return cmdHelp();
+    case '--version':
+    case '-v': {
+      const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf-8'));
+      console.log(`cadre ${pkg.version}`);
+      return 0;
+    }
     case 'parity': return cmdParity(_, flags);
     case 'plan': return cmdPlan(_, flags);
     case 'meter': return cmdMeter(_, flags);
@@ -90,6 +98,7 @@ async function main() {
     case 'metrics': return cmdMetrics(_, flags);
     case 'approach': return cmdApproach(_, flags);
     case 'doctor': return cmdDoctor(_, flags);
+    case 'init': return cmdInit(_, flags);
     case 'debate': return cmdDebate(_, flags);
     case 'pin': return cmdPin(_, flags);
     case 'mcp': return cmdMcp(_, flags);

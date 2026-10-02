@@ -7,6 +7,19 @@ this machine. Every command does real work: state lives under `$CADRE_HOME`
 (default `~/.cadre`), builds delegate to `ax build`, evidence gates re-check disk
 before stamping anything, and anything not wired says so and exits 2.
 
+## Quickstart (cold machine)
+
+```bash
+git clone https://github.com/pamu512/cadre && cd cadre
+npm i -g .            # or: npx --yes cadre@latest once published
+cadre init            # scaffold ~/.cadre with an example lane
+cadre doctor          # preflight: one fix line per problem
+cadre go "small outcome" --dry   # see routing before spending
+```
+
+Core works standalone (lanes, plan, map, metrics, command lanes). Crew quality
+depends on the lanes your machine already has.
+
 ## Commands (all real)
 
 | Command | What it actually does |
