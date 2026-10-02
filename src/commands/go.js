@@ -59,6 +59,12 @@ export async function cmdGo(args, flags, { cwd = process.cwd() } = {}) {
     console.log(explainRouting(routing).replace(/^/gm, '  '));
     console.log(`keyed chat lanes: ${roster.lanes.filter(chatLaneAvailable).map((l) => l.name).join(', ') || 'none - planner uses the local scaffold, critic skipped'}`);
     console.log('pipeline: sweep -> scan -> route -> plan -> build -> critique -> verify -> gate -> file');
+    // reflect the standalone builder override the real run will apply
+    const userCmd2 = roster.lanes.find((l) => l.invoke?.kind === 'command');
+    const chatL2 = roster.lanes.find((l) => ['openai-compatible', 'http-chat', 'chat'].includes(l.invoke?.kind) && chatLaneAvailable(l));
+    if (!flags.ax && (userCmd2 || chatL2)) {
+      console.log(`standalone builder (real run): ${chatLaneAvailable(userCmd2 || chatL2) && (userCmd2 || chatL2).invoke?.kind !== 'command' ? (userCmd2 || chatL2).name : (userCmd2 || chatL2).name}  (command/chat lane preferred over the ax routing above)`);
+    }
     return 0;
   }
 
