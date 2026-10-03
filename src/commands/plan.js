@@ -24,7 +24,7 @@ export async function cmdPlan(args, flags) {
       console.log(`map · warm - hot zones: ${m.hotZones.slice(0, 3).map((h) => h.path).join(', ')}`);
     }
   } catch { /* hint only */ }
-  const routing = assignRoles(roster, { brief: task });
+  const routing = assignRoles(roster, { brief: task, roleOverride: flags.role || null, override: Boolean(flags.override) });
 
   // bench ranking (PRD 6.4): accuracy-per-dollar from real gated history —
   // lanes that produced passing gated runs rank above untested lanes; among
@@ -32,20 +32,10 @@ export async function cmdPlan(args, flags) {
   // Task-class aware (the contract): FOR THIS TASK CLASS - runs whose brief
   // classifies the same way as this one count toward the ranking; other runs
   // are excluded so a lane great at scaffolds doesn't inherit a review rank.
-  const { listRuns } = await import('../store.js');
   const { classifyTask } = await import('../taskclass.js');
+  const { benchStats } = await import('../router.js');
   const myClass = classifyTask(task).class;
-  const history = listRuns().filter((r) => r.status === 'passed' && r.roles);
-  const stats = new Map();
-  for (const r of history) {
-    if (classifyTask(r.brief || '').class !== myClass) continue; // THIS task class only
-    for (const lane of Object.values(r.roles || {})) {
-      const cur = stats.get(lane) || { passed: 0, tokens: 0 };
-      cur.passed += 1;
-      cur.tokens += r.usage?.metered_tokens || 0;
-      stats.set(lane, cur);
-    }
-  }
+  const stats = benchStats(myClass);
   const rankScore = (s) => (s ? s.passed / Math.max(1, s.tokens / 10000) : -1);
   const ranked = roster.lanes
     .map((l) => ({ lane: l, s: stats.get(l.name) }))
@@ -56,6 +46,7 @@ export async function cmdPlan(args, flags) {
   console.log(`roster · ${roster.lanes.length} lane(s) on this machine (${roster.platform})`);
   console.log('routing (roles by fit, pins override):');
   console.log(explainRouting(routing).replace(/^/gm, '  '));
+  for (const a of routing.assignments.alerts || []) console.log(a);
 
   // spend estimate from cost classes: plan/free roles cost $0 metered;
   // metered roles estimate tokens (heuristic sizes, printed as estimates).

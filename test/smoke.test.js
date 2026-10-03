@@ -329,6 +329,37 @@ test('scope lock: creep is caught, in-lock changes are not', async () => {
   assert.deepEqual(scopeCreep(['anything/here.js'], open), []);
 });
 
+test('done-condition: command exit, keywords in the diff, never the run log', async () => {
+  const { buildScopeManifest, checkDoneCondition, deriveIntent } = await import(join(ROOT, 'src/scope.js'));
+  assert.deepEqual(deriveIntent('fix src/auth.js and leave README.md'), ['src/auth.js', 'README.md']);
+  const derived = buildScopeManifest({ brief: 'create proof3.txt containing the single line: done-test' });
+  assert.deepEqual(derived.lock, ['proof3.txt']);
+  assert.equal(derived.lockSource, 'derived from the brief');
+  const explicit = buildScopeManifest({ brief: 'create proof3.txt containing x', scope: 'src/**' });
+  assert.deepEqual(explicit.lock, ['src/**']);
+
+  const dir = mkdtempSync(join(tmpdir(), 'cadre-done-'));
+  writeFileSync(join(dir, 'proof3.txt'), 'quota window refill\n');
+  writeFileSync(join(dir, 'run.log'), 'done: entirely unrelated keywords\n');
+
+  const same = buildScopeManifest({ brief: 'just the brief' });
+  assert.equal(checkDoneCondition(same, { cwd: dir, changedFiles: ['proof3.txt'] }).checked, false);
+
+  const cmdOk = buildScopeManifest({ brief: 'x', doneCondition: 'node -e "process.exit(0)"' });
+  assert.equal(checkDoneCondition(cmdOk, { cwd: dir, changedFiles: [] }).ok, true);
+  const cmdBad = buildScopeManifest({ brief: 'x', doneCondition: 'node -e "process.exit(2)"' });
+  assert.equal(checkDoneCondition(cmdBad, { cwd: dir, changedFiles: [] }).ok, false);
+
+  const kw = buildScopeManifest({ brief: 'create proof3.txt', doneCondition: 'quota window refill holds' });
+  const hit = checkDoneCondition(kw, { cwd: dir, changedFiles: ['proof3.txt'] });
+  assert.equal(hit.ok, true);
+
+  // run 0067 false-PROVEN: the log echoes the condition, the diff does not
+  const echo = buildScopeManifest({ brief: 'create proof3.txt', doneCondition: 'entirely unrelated keywords' });
+  const lied = checkDoneCondition(echo, { cwd: dir, changedFiles: ['proof3.txt', join(dir, 'run.log')] });
+  assert.equal(lied.ok, false);
+});
+
 test('minimatch-lite: the globs cadre promises', async () => {
   const { minimatch } = await import(join(ROOT, 'src/minimatch-lite.js'));
   assert.ok(minimatch('src/auth/login.js', 'src/auth/**'));
@@ -416,7 +447,8 @@ test('B7 sweep --resume emits a resume-plan artifact', async () => {
     assert.deepEqual(plan.steps_remaining, ['BUILD', 'CRITIQUE', 'VERIFY', 'GATE']);
     assert.equal(plan.evidence_kept.length, 1);
     assert.ok(plan.rebrief_command.includes('\\"quoted\\"'));
-    assert.ok(plan.honest_note.includes('not resumable mid-pipeline'));
+    assert.ok(plan.continue_command.includes(`--resume ${r.id}`));
+    assert.ok(plan.honest_note.includes('checkpoint'));
   } finally {
     delete process.env.CADRE_HOME;
   }

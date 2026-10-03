@@ -66,9 +66,20 @@ test('P0#8/B8: builder-only command evidence fails the gate; mixed passes', asyn
   assert.ok(good.passed, 'mixed evidence must pass');
 });
 
-test('P1#6: Gemini CLI probe row exists in scan', async () => {
-  const src = readFileSync(join(ROOT, 'src/scan.js'), 'utf-8');
-  assert.ok(src.includes("bin: 'gemini'"));
+test('P1#6: a CLI on PATH is a roster lane, with no lane file', async () => {
+  const { scanCliLanes } = await import(join(ROOT, 'src/scan.js'));
+  const dir = mkdtempSync(join(tmpdir(), 'cadre-cli-'));
+  const bin = join(dir, 'gemini');
+  writeFileSync(bin, '#!/bin/sh\nexit 0\n');
+  const { chmodSync } = await import('node:fs');
+  chmodSync(bin, 0o755);
+  const lanes = scanCliLanes(dir);
+  const g = lanes.find((l) => l.name === 'cli-gemini');
+  assert.ok(g, 'gemini on PATH is a lane');
+  assert.equal(g.invoke.status, 'ok');
+  assert.equal(g.invoke.path, bin);
+  assert.deepEqual(g.good_at, ['cli']);
+  assert.equal(lanes.some((l) => l.name === 'cli-not-here'), false);
 });
 
 test('P1#7: go consults the warm map (hot zones in the run path)', async () => {

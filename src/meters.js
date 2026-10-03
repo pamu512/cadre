@@ -4,10 +4,11 @@
 //      plan names, window resets, quotas the user reads off their own dashboards)
 //   2. real usage from audit.log receipts (what cadre actually burned)
 // NO header telemetry, NO invented quotas: unknown values render as "—".
-import { existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
+import http from 'node:http';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { home, auditPath, listRuns } from './store.js';
+import { home, auditPath, listRuns, audit } from './store.js';
 
 export function loadMeters() {
   const p = join(home(), 'meters.json');
@@ -22,8 +23,7 @@ export function saveMeters(meters) {
 // usage per lane from audit receipts (lane-call events carry usage)
 export function usageFromAudit() {
   const per = new Map();
-  if (!existsSync(auditPath())) return per;
-  for (const line of readFileSync(auditPath(), 'utf-8').split('\n')) {
+  if (existsSync(auditPath())) for (const line of readFileSync(auditPath(), 'utf-8').split('\n')) {
     if (!line.trim()) continue;
     let ev; try { ev = JSON.parse(line); } catch { continue; }
     if ((ev.kind === 'lane-call') && ev.usage) {
@@ -33,7 +33,75 @@ export function usageFromAudit() {
       per.set(ev.lane, cur);
     }
   }
+  for (const [lane, v] of readCliUsage()) {
+    const cur = per.get(lane) || { calls: 0, tokens: 0 };
+    cur.tokens += v.tokens || 0;
+    per.set(lane, cur);
+  }
   return per;
+}
+
+// On-disk usage the CLI already wrote. No network, no sqlite, no message text.
+// $CADRE_HOME/cli-usage.json is the explicit ledger. Claude and Codex jsonl
+// token fields are summed only for the real cadre home, so a test home stays exact.
+export function readCliUsage() {
+  const per = new Map();
+  const add = (lane, tokens) => {
+    const n = Number(tokens) || 0;
+    if (!lane || n <= 0) return;
+    const cur = per.get(lane) || { calls: 0, tokens: 0 };
+    cur.tokens += n;
+    per.set(lane, cur);
+  };
+  try {
+    const j = JSON.parse(readFileSync(join(home(), 'cli-usage.json'), 'utf-8'));
+    const lanes = j.lanes && typeof j.lanes === 'object' ? j.lanes : j;
+    for (const [lane, v] of Object.entries(lanes)) {
+      if (lane === 'lanes') continue;
+      add(lane, v?.tokens ?? v);
+    }
+  } catch { /* no local ledger */ }
+  const real = !process.env.CADRE_HOME || process.env.CADRE_HOME === join(homedir(), '.cadre');
+  if (!real) return per;
+  add('claude', sumJsonlTokens(join(homedir(), '.claude'), 20));
+  add('codex', sumJsonlTokens(join(homedir(), '.codex', 'sessions'), 20));
+  return per;
+}
+
+function sumJsonlTokens(dir, cap) {
+  const files = [];
+  (function walk(d, depth) {
+    if (depth > 6 || files.length > 400) return;
+    let ents;
+    try { ents = readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of ents) {
+      if (files.length > 400) return;
+      const full = join(d, e.name);
+      if (e.isDirectory()) {
+        if (e.name === 'node_modules') continue;
+        walk(full, depth + 1);
+      } else if (e.name.endsWith('.jsonl')) files.push(full);
+    }
+  })(dir, 0);
+  files.sort((a, b) => {
+    try { return statSync(b).mtimeMs - statSync(a).mtimeMs; } catch { return 0; }
+  });
+  let tokens = 0;
+  let n = 0;
+  const re = /"(?:input_tokens|output_tokens)"\s*:\s*(\d+)/g;
+  for (const f of files) {
+    if (n >= cap) break;
+    let st;
+    try { st = statSync(f); } catch { continue; }
+    if (st.size > 512 * 1024) continue;
+    n += 1;
+    let text;
+    try { text = readFileSync(f, 'utf-8'); } catch { continue; }
+    re.lastIndex = 0;
+    let m;
+    while ((m = re.exec(text))) tokens += Number(m[1]) || 0;
+  }
+  return tokens;
 }
 
 // pacing: quota Q, window reset R, usage U -> verdict. Entitlement-aware:
@@ -279,6 +347,57 @@ export function makeWindowBucket({ quota, rollover = 0, used = 0, windowHours = 
 }
 
 // waitMsFor needs the closure's available(), not this-binding - proper factory:
+// Read a provider status endpoint. Only loopback URLs are contacted, and the
+// request carries no Authorization header and no key. Each read is a ledger event.
+// Apply a status payload onto a declared meter. Only numbers and reset
+// timestamps are copied. The body is not stored.
+export function applyStatusBody(meter, body) {
+  if (!meter || !body || typeof body !== 'object') return null;
+  const num = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+  const limit = num(body.limit ?? body.quota ?? body.quota_tokens);
+  const remaining = num(body.remaining ?? body.remaining_tokens);
+  const next = { ...meter, updated: new Date().toISOString() };
+  let changed = false;
+  if (limit != null) { next.quota_tokens = limit; changed = true; }
+  if (limit != null && remaining != null) { next.used_tokens = Math.max(0, limit - remaining); changed = true; }
+  const reset = body.reset || body.reset_at;
+  if (typeof reset === 'string' && reset) { next.reset_at = reset; changed = true; }
+  const rpm = num(body.rpm);
+  if (rpm != null) { next.rpm = rpm; changed = true; }
+  return changed ? next : null;
+}
+
+export function readLocalMeter(url, { timeoutMs = 800 } = {}) {
+  let u;
+  try { u = new URL(url); } catch { return Promise.resolve({ ok: false, error: 'bad url' }); }
+  if (u.protocol !== 'http:' || !['127.0.0.1', 'localhost', '::1'].includes(u.hostname)) {
+    return Promise.resolve({ ok: false, error: 'meter reads stay on this machine (loopback only)' });
+  }
+  return new Promise((resolve) => {
+    const req = http.request(
+      { hostname: u.hostname, port: u.port, path: u.pathname + u.search, method: 'GET', timeout: timeoutMs, headers: {} },
+      (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => {
+          const sentAuth = Boolean(req.getHeader?.('authorization') || req.getHeader?.('Authorization'));
+          let body = null;
+          try { body = JSON.parse(Buffer.concat(chunks).toString('utf-8')); } catch { body = null; }
+          const event = { kind: 'meter-read', url: u.origin + u.pathname, status: res.statusCode, auth: sentAuth };
+          try { audit(event); } catch { /* ledger best-effort */ }
+          resolve({ ok: res.statusCode > 0 && res.statusCode < 500, status: res.statusCode, body, auth: sentAuth });
+        });
+      },
+    );
+    req.on('timeout', () => { req.destroy(); resolve({ ok: false, error: 'timeout' }); });
+    req.on('error', (e) => resolve({ ok: false, error: e.message }));
+    req.end();
+  });
+}
+
 export function windowBucket(opts) {
   const b = makeWindowBucket(opts);
   return {

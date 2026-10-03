@@ -186,15 +186,28 @@ test('scan: MCP servers discovered from standard configs as lanes', async () => 
   }
 });
 
-test('scan: known agent apps probed on darwin (no false lanes)', async () => {
-  const src = readFileSync(join(ROOT, 'src/scan.js'), 'utf-8');
-  assert.ok(src.includes('probeAgentApps'), 'app probe exists');
-  assert.ok(src.includes('Claude.app') && src.includes('Cursor.app'), 'known apps table');
-  const { buildRoster } = await import(join(ROOT, 'src/scan.js'));
-  const roster = await buildRoster();
-  for (const l of roster.lanes.filter((x) => x.name.startsWith('app-'))) {
-    assert.ok(l.invoke.bundle, 'app lane names its bundle');
-  }
+test('scan: apps, keys, and local models come from the machine', async () => {
+  const { probeAgentApps, scanKeyLanes, modelsFromOllama, modelsFromOpenAIList } = await import(join(ROOT, 'src/scan.js'));
+  const dir = mkdtempSync(join(tmpdir(), 'cadre-apps-'));
+  mkdirSync(join(dir, 'Widget.app'));
+  mkdirSync(join(dir, 'Idle.app'));
+  const apps = probeAgentApps([dir], '/Applications/Widget.app/Contents/MacOS/Widget');
+  const widget = apps.find((l) => l.name === 'app-widget');
+  const idle = apps.find((l) => l.name === 'app-idle');
+  assert.equal(widget.invoke.bundle, 'Widget.app');
+  assert.equal(widget.invoke.status, 'ok');
+  assert.equal(idle.invoke.status, 'ready');
+  assert.equal(apps.some((l) => l.invoke.bundle === 'Claude.app'), false);
+
+  const secret = 'super-secret-value';
+  const keys = scanKeyLanes({ CADRE_EXAMPLE_API_KEY: secret, EMPTY_API_KEY: '  ', NOT_A_KEY: 'x' });
+  assert.equal(keys.length, 1);
+  assert.equal(keys[0].invoke.env, 'CADRE_EXAMPLE_API_KEY');
+  assert.equal(keys[0].invoke.status, 'ok');
+  assert.ok(!JSON.stringify(keys).includes(secret), 'key value must not be copied onto the lane');
+
+  assert.deepEqual(modelsFromOllama({ models: [{ name: 'llama3:latest' }] }), ['llama3:latest']);
+  assert.deepEqual(modelsFromOpenAIList({ data: [{ id: 'local-model' }] }), ['local-model']);
 });
 
 test('invoke: MCP lane lifecycle over stdio (initialize -> tools -> call)', { timeout: 60000 }, async () => {
@@ -364,7 +377,7 @@ test('go: early-aborted runs still carry the usage rollup', { timeout: 120000 },
   const h = home('earlyabort');
   mkdirSync(join(h.dir, 'lanes'), { recursive: true });
   writeFileSync(join(h.dir, 'lanes', 'broken.json'), JSON.stringify({
-    name: 'broken', good_at: ['general'], cost: 'free', talks: 'terminal', proves: 'commands',
+    name: 'broken', good_at: ['create', 'write', 'fixtures'], cost: 'free', talks: 'terminal', proves: 'commands',
     invoke: { kind: 'command', command: 'false' },
   }));
   const proj = mkdtempSync(join(tmpdir(), 'earlyabort-'));
@@ -375,25 +388,22 @@ test('go: early-aborted runs still carry the usage rollup', { timeout: 120000 },
   assert.ok(rec.usage?.budget_tokens, 'usage rollup must exist even on aborted runs');
 });
 
-test('parity --verify: behavior-closing executor with citations; ref excluded (no circularity)', async () => {
-  const { runBehaviorCheck, keywords, mentionedPaths } = await import(join(ROOT, 'src/behaviorcheck.js'));
-  // file check: named path exists (a file this repo really has)
-  const f = runBehaviorCheck('provide schemas/lane.schema.json with the contract', ROOT, { refPath: null });
-  assert.ok(f.closed && f.kind === 'file' && f.citation === 'schemas/lane.schema.json', 'file check closes with path cite');
-  // file check: missing path stays open honestly
-  const f2 = runBehaviorCheck('provide docs/NOPE.md with usage', ROOT, { refPath: null });
-  assert.ok(!f2.closed && /missing/.test(f2.reason));
-  // keyword check with ref EXCLUDED: the spec doc itself must not satisfy it
+test('parity --verify: a named check closes; prose and a mentioned path do not', async () => {
+  const { runBehaviorCheck } = await import(join(ROOT, 'src/behaviorcheck.js'));
+  const f = runBehaviorCheck('schemas/lane.schema.json exists', ROOT);
+  assert.ok(f.closed && f.kind === 'file' && f.citation === 'schemas/lane.schema.json', 'path-exists check closes with the path');
+  const prose = runBehaviorCheck('provide schemas/lane.schema.json with the contract', ROOT);
+  assert.equal(prose.closed, false);
+  assert.equal(prose.kind, 'uncheckable');
+  const missing = runBehaviorCheck('docs/NOPE.md exists', ROOT);
+  assert.ok(!missing.closed && /missing/.test(missing.reason));
   const proj = mkdtempSync(join(tmpdir(), 'beh-'));
-  writeFileSync(join(proj, 'SPEC.md'), 'the zebraconfig module must exist somewhere\n');
-  writeFileSync(join(proj, 'impl.js'), 'export const zebraconfig = 1; // module exists\n');
-  const hit = runBehaviorCheck('the zebraconfig module must exist somewhere', proj, { refPath: 'SPEC.md' });
-  assert.ok(hit.closed && hit.citation === 'impl.js:1', 'citation must point at the implementation, not the ref: ' + hit.citation);
-  // and with only the ref containing the words, it must NOT close
-  const proj2 = mkdtempSync(join(tmpdir(), 'beh2-'));
-  writeFileSync(join(proj2, 'SPEC.md'), 'the zebraconfig module must exist somewhere\n');
-  const miss = runBehaviorCheck('the zebraconfig module must exist somewhere', proj2, { refPath: 'SPEC.md' });
-  assert.ok(!miss.closed, 'ref-only keyword hit must stay open');
+  writeFileSync(join(proj, 'impl.js'), 'export const zebraconfig = 1;\n');
+  const hit = runBehaviorCheck('impl.js contains zebraconfig', proj);
+  assert.ok(hit.closed && hit.citation === 'impl.js', hit.reason);
+  const words = runBehaviorCheck('the zebraconfig module must exist somewhere', proj);
+  assert.equal(words.closed, false);
+  assert.equal(words.kind, 'uncheckable');
 });
 
 test('parity --until-proven: loop closes the contract via a builder', { timeout: 240000 }, async () => {
@@ -405,7 +415,7 @@ test('parity --until-proven: loop closes the contract via a builder', { timeout:
   }));
   const proj = mkdtempSync(join(tmpdir(), 'parityloop-'));
   writeFileSync(join(proj, 'package.json'), JSON.stringify({ name: 'p', scripts: { test: 'node -e "process.exit(0)"' } }));
-  writeFileSync(join(proj, 'SPEC.md'), '# Spec\n\n- create hello.txt containing greeting text\n- provide src/utils.js with a greet function\n');
+  writeFileSync(join(proj, 'SPEC.md'), '# Spec\n\n- create hello.txt containing greeting text\n- src/utils.js contains greet\n');
   const r = await cli(h, 'parity', 'match the spec', '--ref', join(proj, 'SPEC.md'), '--cwd', proj, '--until-proven', '--max-iter', '3');
   assert.ok(r.stdout.includes('ALL BEHAVIORS CLOSED'), 'loop must converge: ' + r.stdout.split('\n').slice(-4).join(' | '));
   assert.ok(existsSync(join(proj, 'hello.txt')));
@@ -440,13 +450,12 @@ test('parity: contracts are PINNED - sha256 of ref and behaviors; drift detected
   assert.notEqual(driftedSha, JSON.parse(pinned).ref_sha256, 'drifted ref no longer matches pin');
 });
 
-test('parity: issue-cited behaviors trace to real issues (gh), nonexistent stay open', { timeout: 90000 }, async () => {
-  const { mentionedIssues, runBehaviorCheckAsync } = await import(join(ROOT, 'src/behaviorcheck.js'));
+test('parity: an issue number is not a closing check', async () => {
+  const { mentionedIssues, runBehaviorCheck } = await import(join(ROOT, 'src/behaviorcheck.js'));
   assert.deepEqual(mentionedIssues('fix #126 and GH-45 and issue 7'), [126, 45, 7]);
-  const real = await runBehaviorCheckAsync('the crash from #126 is fixed', ROOT, { ghRepo: 'NousResearch/hermes-agent' });
-  assert.ok(real.closed && real.citation === 'issue #126', 'real issue closes with citation');
-  const fake = await runBehaviorCheckAsync('the crash from #999999 is fixed', ROOT, { ghRepo: 'NousResearch/hermes-agent' });
-  assert.ok(!fake.closed && /not found/.test(fake.reason), 'fake issue stays open');
+  const named = runBehaviorCheck('the crash from #126 is fixed', ROOT);
+  assert.equal(named.closed, false);
+  assert.equal(named.kind, 'uncheckable');
 });
 
 test('taskclass: deterministic/judgment/mixed classification and role-aware cost policy', async () => {
@@ -522,6 +531,50 @@ test('parity loop report: summary row (laps, spend per lane, tokens) + stretch p
   assert.equal(summary.laps_burned, 2, 'laps burned recorded');
   assert.ok(summary.spend_per_lane && 'spec-builder' in summary.spend_per_lane, 'spend per lane recorded');
   assert.equal(summary.closed, 1, 'closed count recorded');
+});
+
+test('parity beyond: stretch checks run only after core, and only when the goal says so', { timeout: 240000 }, async () => {
+  const h = home('beyond');
+  mkdirSync(join(h.dir, 'lanes'), { recursive: true });
+  writeFileSync(join(h.dir, 'lanes', 'spec-builder.json'), JSON.stringify({
+    name: 'spec-builder', good_at: ['create', 'write'], cost: 'free', talks: 'terminal', proves: 'commands',
+    invoke: { kind: 'command', command: `/bin/sh ${join(ROOT, 'scripts/spec-fixture.sh')} {brief}` },
+  }));
+  const proj = mkdtempSync(join(tmpdir(), 'beyond-'));
+  writeFileSync(join(proj, 'SPEC.md'), '# Spec\n\n- hello.txt exists\n\n# Stretch\n\n- extra.txt exists\n\n# Out of scope\n\n- secret.txt exists\n');
+  const held = await cli(h, 'parity', 'match the spec', '--ref', join(proj, 'SPEC.md'), '--cwd', proj, '--until-proven', '--max-iter', '3');
+  assert.ok(held.stdout.includes('ALL BEHAVIORS CLOSED'), held.stdout);
+  assert.ok(existsSync(join(proj, 'hello.txt')));
+  assert.equal(existsSync(join(proj, 'extra.txt')), false);
+  assert.equal(existsSync(join(proj, 'secret.txt')), false);
+  const proj2 = mkdtempSync(join(tmpdir(), 'beyond2-'));
+  writeFileSync(join(proj2, 'SPEC.md'), readFileSync(join(proj, 'SPEC.md')));
+  const go = await cli(h, 'parity', 'beyond parity', '--ref', join(proj2, 'SPEC.md'), '--cwd', proj2, '--until-proven', '--max-iter', '3');
+  assert.ok(go.stdout.includes('core closed · starting stretch'), go.stdout);
+  assert.ok(go.stdout.includes('ALL BEHAVIORS CLOSED'), go.stdout);
+  assert.ok(existsSync(join(proj2, 'extra.txt')));
+  assert.equal(existsSync(join(proj2, 'secret.txt')), false);
+  assert.ok(go.stdout.includes('excluded, not built'));
+});
+
+test('parity lap cap checkpoints and a green suite with no spec stops', async () => {
+  const h = home('cap');
+  mkdirSync(join(h.dir, 'lanes'), { recursive: true });
+  writeFileSync(join(h.dir, 'lanes', 'spec-builder.json'), JSON.stringify({
+    name: 'spec-builder', good_at: ['create', 'write'], cost: 'free', talks: 'terminal', proves: 'commands',
+    invoke: { kind: 'command', command: '/usr/bin/true {brief}' },
+  }));
+  const proj = mkdtempSync(join(tmpdir(), 'cap-'));
+  writeFileSync(join(proj, 'SPEC.md'), '# Spec\n\n- missing.bin exists\n');
+  const capped = await cli(h, 'parity', 'match', '--ref', join(proj, 'SPEC.md'), '--cwd', proj, '--until-proven', '--max-iter', '1');
+  assert.equal(capped.rc, 5);
+  assert.ok(capped.stdout.includes('continue: cadre parity --until-proven --resume last'), capped.stdout);
+  assert.ok(existsSync(join(h.dir, 'parity-checkpoint.json')));
+  const green = mkdtempSync(join(tmpdir(), 'green-'));
+  writeFileSync(join(green, 'package.json'), JSON.stringify({ name: 'g', scripts: { test: 'node -e "process.exit(0)"' } }));
+  const ok = await cli(h, 'parity', '--until-proven', '--cwd', green);
+  assert.equal(ok.rc, 0);
+  assert.ok(ok.stdout.includes('test suite already green'), ok.stdout);
 });
 
 test('chatlane: 429 backoff honors Retry-After exactly, recovers; exhaustion throws CADRE_RATE_LIMITED', { timeout: 60000 }, async () => {

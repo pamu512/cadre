@@ -33,7 +33,7 @@ export async function cmdInit(args, flags) {
     // strip comments for valid JSON on disk (comments are for the docs below)
     writeFileSync(example, JSON.stringify({
       name: 'my-first-lane', good_at: ['general'], cost: 'free', talks: 'terminal', proves: 'commands',
-      invoke: { kind: 'command', command: 'echo', note: 'replace echo with your tool; {brief} is the task' },
+      invoke: { kind: 'command', command: 'echo', example: true, note: 'replace echo with your tool; {brief} is the task. example:true keeps this off the roster' },
     }, null, 2) + '\n');
     created.push(example);
   } else existed.push(example);
@@ -44,8 +44,8 @@ export async function cmdInit(args, flags) {
   for (const c of created) console.log(`  created  ${c}`);
   for (const e of existed) console.log(`  exists   ${e} (left untouched)`);
   console.log('\nnext steps:');
-  console.log('  1. edit ~/.cadre/lanes/my-first-lane.json - point the command at a real tool');
-  console.log('  2. cadre lanes            # your lane appears in the roster');
+  console.log('  1. cadre lanes            # the roster is already whatever is on this machine');
+  console.log('  2. optional: a command template in ~/.cadre/lanes/*.json (the example file is not on the roster)');
   console.log('  3. cadre plan "<task>"    # see routing before spending');
   console.log('  4. cadre go "<outcome>"   # run the loop, gated on evidence');
   return 0;

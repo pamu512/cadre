@@ -24,13 +24,23 @@ export function resolveChat(lane) {
   }
   if (!base) return { key, url: null, model: inv.model || lane.model };
   base = base.replace(/\/+$/, '');
-  const url = new URL(base.endsWith('/v1') ? base + '/chat/completions' : base + '/v1/chat/completions');
+  const url = new URL(
+    base.endsWith('/chat/completions') || base.endsWith('/messages')
+      ? base
+      : base.endsWith('/v1') ? base + '/chat/completions' : base + '/v1/chat/completions',
+  );
   return { key, url, model: inv.model || lane.model };
+}
+
+function loopback(url) {
+  try { return ['127.0.0.1', 'localhost', '::1'].includes(url.hostname); } catch { return false; }
 }
 
 export function chatLaneAvailable(lane) {
   if (!CHAT_KINDS.includes(lane?.invoke?.kind)) return false;
-  return Boolean(resolveChat(lane).key);
+  const resolved = resolveChat(lane);
+  if (resolved.key) return true;
+  return Boolean(resolved.url && loopback(resolved.url));
 }
 
 // messages -> { text, usage, model }. Throws CADRE_SKIP when unkeyed.
@@ -39,7 +49,7 @@ export function chatLaneAvailable(lane) {
 // throws CADRE_RATE_LIMITED so the fallback chain can downshift honestly.
 export async function chatLane(lane, messages, opts = {}) {
   const { key, url, model: laneModel } = resolveChat(lane);
-  if (!key) {
+  if (!key && !(url && loopback(url))) {
     const err = new Error(`${lane.name}: env key not set - live calls skipped (export ${lane.invoke?.api_key_env || lane.invoke?.env || lane.env || 'the lane key'} to enable)`);
     err.code = 'CADRE_SKIP';
     throw err;
@@ -64,7 +74,13 @@ export async function chatLane(lane, messages, opts = {}) {
       err.code = 'CADRE_RATE_LIMITED';
       throw err;
     }
-    if (wait > 0) await new Promise((r) => setTimeout(r, Math.min(wait, 60000)));
+    if (wait > 60000) {
+      const err = new Error(`${lane.name}: window pace wants ${Math.round(wait / 1000)}s — pausing instead of spending`);
+      err.code = 'CADRE_PACED';
+      err.waitMs = wait;
+      throw err;
+    }
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
   }
   // rate-limit meter: if this lane has a declared rpm/rps ceiling, wait for
   // window room instead of slamming the provider into a 429
@@ -91,8 +107,10 @@ export async function chatLane(lane, messages, opts = {}) {
       await new Promise((r) => setTimeout(r, waitMs));
     }
     try {
+      const headers = { 'content-type': 'application/json', 'user-agent': 'cadre/0.2' };
+      if (key) headers.authorization = `Bearer ${key}`;
       const payload = await postJson(url, {
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${key}`, 'user-agent': 'cadre/0.2' },
+        headers,
         body,
         timeoutMs: opts.timeoutMs ?? 120000,
       });

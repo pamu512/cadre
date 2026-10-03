@@ -2,23 +2,52 @@
 // gates on evidence, files the receipts. Every step is real on this machine:
 // ax lanes delegate to the ax binary; keyed chat lanes (any OpenAI-compatible
 // re-checks artifacts on disk before stamping anything.
+import { createHash } from 'node:crypto';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { buildRoster } from '../scan.js';
-import { assignRoles, explainRouting } from '../router.js';
+import { recordOutcome, recordChoice, resolveHabit, scoreRole, inferQuietHours } from '../preferences.js';
+import { laneDrivable } from '../invoke.js';
+import { assignRoles, explainRouting, bestDrivable } from '../router.js';
 import { auditCall } from '../laneaudit.js';
 import { chatLaneAvailable, chatLane } from '../chatlane.js';
 import { gateVerdict, renderGateReport, verifyCommands } from '../gate.js';
 import { invokeLane } from '../invoke.js';
-import { buildScopeManifest, scopeCreep, renderManifest } from '../scope.js';
+import { buildScopeManifest, scopeCreep, renderManifest, checkDoneCondition, writeScopeFile, readScopeFile, runDeltaFiles, settleCreep, lockSpecs } from '../scope.js';
 import {
-  createRun, updateRun, appendLog, addEvidence, audit, listRuns, loadPins, home, readRun,
+  createRun, updateRun, appendLog, addEvidence, audit, listRuns, loadPins, savePins, home, readRun,
   acquireLock, releaseLock,
 } from '../store.js';
 
 const run = promisify(execFile);
+
+function notePreferences(roles, flags, { passed, creep, tokens, planText = '', delta = [], critique = '', verified = null }) {
+  for (const [role, lane] of Object.entries(roles || {})) {
+    if (!lane) continue;
+    const explicit = Boolean(flags.override) || (typeof flags.role === 'string' && flags.role.startsWith(`${role}=`));
+    const rolePassed = scoreRole(role, { passed, planText, delta, critique, verified });
+    recordOutcome({ role, lane, source: explicit ? 'explicit' : 'fit', passed: rolePassed, creep: role === 'builder' ? creep : false, tokens });
+  }
+  if (typeof flags.scope === 'string') recordChoice('scope', String(flags.scope), { passed });
+  if (flags.budget) recordChoice('budget', String(flags.budget), { passed });
+}
+
+async function rememberHands(byRole, { brief, delta, passed, critique }) {
+  const { rememberHandOutcome } = await import('../invoke.js');
+  const files = (delta || []).map((f) => String(f?.file || f)).filter(Boolean);
+  for (const lane of Object.values(byRole || {})) {
+    if (lane?.invoke?.kind !== 'hand') continue;
+    rememberHandOutcome(lane, { files, passed, critique, task: brief });
+  }
+}
+
+function markPhase(id, phase, data = {}) {
+  const cur = readRun(id);
+  const prev = cur?.checkpoint || { phases: [] };
+  updateRun(id, { checkpoint: { ...prev, ...data, phases: [...new Set([...(prev.phases || []), phase])] } });
+}
 
 function detectTestCommand(cwd) {
   if (existsSync(join(cwd, 'package.json'))) {
@@ -69,56 +98,98 @@ async function gitState(cwd) {
   } catch { return null; }
 }
 
+function referenceMoved(run) {
+  const ref = run?.meta?.ref;
+  const prev = run?.meta?.refSha;
+  if (!ref || !prev || !existsSync(ref)) return null;
+  const now = createHash('sha256').update(readFileSync(ref)).digest('hex');
+  return now === prev ? null : { ref, prev, now };
+}
+
 export async function cmdGo(args, flags, { cwd = process.cwd() } = {}) {
-  const brief = args.join(' ').trim();
+  let brief = args.join(' ').trim();
+  let resumed = null;
+  if (flags.resume) {
+    resumed = readRun(String(flags.resume));
+    if (!resumed) {
+      console.error(`no run ${flags.resume}`);
+      return 1;
+    }
+    if (!brief) brief = resumed.brief;
+    const moved = referenceMoved(resumed);
+    if (moved) {
+      const neu = createRun({
+        brief: resumed.brief, kind: 'parity',
+        meta: { ref: moved.ref, refSha: moved.now, queuedFrom: resumed.id },
+      });
+      updateRun(neu.id, { status: 'queued', verdict: { passed: false, summary: `reference moved; re-locked from ${resumed.id}` } });
+      updateRun(resumed.id, { status: 'retired', ended: new Date().toISOString(), verdict: { passed: false, summary: `reference moved; re-locked as ${neu.id}` } });
+      console.log(`reference moved · retired ${resumed.id} · queued ${neu.id} to re-lock ${moved.ref}`);
+      return 0;
+    }
+  }
   if (!brief) {
     console.error('cadre go "<outcome>" - what should the cadre do?');
     return 2;
   }
+  const scopeHabit = resolveHabit('scope', typeof flags.scope === 'string' ? flags.scope : null, { override: Boolean(flags.override) });
+  if (scopeHabit.note) console.log(scopeHabit.note);
+  flags.scope = scopeHabit.value;
+  const budgetAsked = flags.budget ? String(flags.budget) : null;
+  const budgetHabit = resolveHabit('budget', budgetAsked, { override: Boolean(flags.override) });
+  if (budgetHabit.note) console.log(budgetHabit.note);
+  if (budgetAsked || (budgetHabit.value && !loadPins().budget)) flags.budget = budgetHabit.value;
 
   // --dry: show the real routing + pipeline for THIS machine, spend nothing.
   if (flags.dry) {
     const roster = await buildRoster();
-    const routing = assignRoles(roster, { brief });
+    const routing = assignRoles(roster, { brief, roleOverride: flags.role || null, override: Boolean(flags.override) });
     console.log(`cadre go (dry) - ${brief}`);
     console.log(`roster: ${roster.lanes.length} lane(s) on this machine (${roster.clis.map((c) => c.label).join(', ') || 'no CLIs'} · ${roster.platform})`);
     console.log('crew (roles by fit, pins override):');
     console.log(explainRouting(routing).replace(/^/gm, '  '));
+    for (const a of routing.assignments.alerts || []) console.log(a);
+    const fitBuilder = routing.assignments.find((a) => a.role === 'builder');
+    console.log(`builder by fit: ${fitBuilder?.lane || '-'}`);
     console.log(`keyed chat lanes: ${roster.lanes.filter(chatLaneAvailable).map((l) => l.name).join(', ') || 'none - planner uses the local scaffold, critic skipped'}`);
     console.log('pipeline: sweep -> scan -> route -> plan -> build -> critique -> verify -> gate -> file');
-    // reflect the standalone builder override the real run will apply
-    const userCmd2 = roster.lanes.find((l) => l.invoke?.kind === 'command');
-    const chatL2 = roster.lanes.find((l) => ['openai-compatible', 'http-chat', 'chat'].includes(l.invoke?.kind) && chatLaneAvailable(l));
-    if (!flags.ax && (userCmd2 || chatL2)) {
-      console.log(`standalone builder (real run): ${chatLaneAvailable(userCmd2 || chatL2) && (userCmd2 || chatL2).invoke?.kind !== 'command' ? (userCmd2 || chatL2).name : (userCmd2 || chatL2).name}  (command/chat lane preferred over the ax routing above)`);
-    }
     return 0;
   }
 
   const roster = await buildRoster();
-  // B4/P0 #7: warm map feeds routing - hot-zone files hint which lanes fit
-  let hotHint = '';
-  try {
-    const { loadMap, mapIsWarm } = await import('../map.js');
-    const m = loadMap(cwd);
-    if (m && mapIsWarm(m) && (m.hotZones || []).length) {
-      const hot = m.hotZones.slice(0, 3).map((h) => h.path).join(', ');
-      hotHint = hot;
-      appendLog(record.id, `MAP hot zones: ${hot}`);
-      console.log(`map · warm - hot zones: ${hot}`);
-    }
-  } catch { /* map is a hint, never a dependency */ }
-  const routing = assignRoles(roster, { brief });
+  const routing = assignRoles(roster, { brief, roleOverride: flags.role || null, override: Boolean(flags.override) });
   // scope lock (PRD 6.6): manifest before work breathes
-  const manifest = buildScopeManifest({ brief, scope: flags.scope, cwd });
+  const manifest = buildScopeManifest({ brief, scope: typeof flags.scope === 'string' ? flags.scope : null, cwd, doneCondition: typeof flags.done === 'string' ? flags.done : null });
   const scopeManifest = manifest; // alias for the rules critic below
-  const record = createRun({
-    brief, kind: 'go',
-    roles: Object.fromEntries(routing.assignments.map((a) => [a.role, a.lane])),
-    meta: { scope: manifest, cwd },
-  });
+  let mapSlice = 'MAP (empty index)';
+  let mapFiles = [];
+  let indexedFiles = [];
+  try {
+    const { ensureMap, sliceFor, mapIsWarm } = await import('../map.js');
+    const { forContext } = await import('../frugal.js');
+    const mapped = ensureMap(cwd);
+    const rawSlice = sliceFor(mapped, { brief, lock: manifest.lock });
+    indexedFiles = [...new Set((mapped.bySymbol || []).flatMap((s) => s.files || []))];
+    mapFiles = [...new Set([...rawSlice.matchAll(/[\w./-]+\.(?:js|mjs|cjs|ts|tsx|py|sh|json|md|txt)\b/g)].map((x) => x[0]))];
+    const frugalSlice = forContext(rawSlice);
+    mapSlice = frugalSlice.text.startsWith('MAP') ? frugalSlice.text : `MAP\n${frugalSlice.text}`;
+    console.log(mapIsWarm(mapped) ? 'map · warm' : 'map · cold');
+    if ((mapped.hotZones || []).length) console.log(`map · hot zones: ${mapped.hotZones.slice(0, 3).map((h) => h.path).join(', ')}`);
+  } catch { /* the slice stays empty; the skill check will say so */ }
+  const roles = Object.fromEntries(routing.assignments.map((a) => [a.role, a.lane]));
+  const record = resumed
+    ? updateRun(resumed.id, { status: 'running', roles, meta: { ...(resumed.meta || {}), scope: manifest, cwd } })
+    : createRun({ brief, kind: 'go', roles, meta: { scope: manifest, cwd } });
+  if (resumed) console.log(`resume · ${record.id} from checkpoint [${(resumed.checkpoint?.phases || []).join(', ') || 'start'}]`);
+  for (const a of routing.assignments.alerts || []) console.log(a);
   acquireLock(record.id, { brief });
   globalThis.CADRE_ACTIVE_RUN = record.id;
+  writeScopeFile(join(home(), 'runs', record.id, 'scope.json'), manifest);
+  writeScopeFile(join(cwd, '.cadre', 'scope.json'), manifest);
+  appendLog(record.id, `SCOPE locked:\n${renderManifest(manifest)}`);
+  const restatement = String(brief).replace(/\s+/g, ' ').slice(0, 180);
+  appendLog(record.id, `RESTATE: ${restatement}`);
+  appendLog(record.id, mapSlice.startsWith('MAP') ? mapSlice : `MAP\n${mapSlice}`);
   // sweep-on-start (#13): fold compatible leftovers into this run (same brief
   // text = compatible; their evidence attaches), retire the rest is NOT done
   // here - incompatible leftovers stay for cadre sweep.
@@ -163,26 +234,37 @@ export async function cmdGo(args, flags, { cwd = process.cwd() } = {}) {
 
   const byRole = Object.fromEntries(routing.assignments.map((a) => [a.role, roster.lanes.find((l) => l.name === a.lane)]));
 
-  // Default loop is STANDALONE (P0 #1): prefer a non-ax builder — a user
-  // command-kind lane, else a keyed chat lane. ax is one adapter, not the
-  // default path; `--ax` forces the old ax-wrapped behavior.
+  // The builder is whoever fits and can be driven. --ax forces an ax lane.
+  // A command lane wins only when its tags fit, not because it was declared.
   if (!flags.ax) {
-    const userCmd = roster.lanes.find((l) => l.invoke?.kind === 'command');
-    const chatL = roster.lanes.find((l) => ['openai-compatible', 'http-chat', 'chat'].includes(l.invoke?.kind) && chatLaneAvailable(l));
-    if (userCmd || chatL) {
-      byRole.builder = userCmd || chatL;
-      appendLog(record.id, `LOCAL loop: builder=${byRole.builder.name} (standalone default)`);
-      console.log(`local · builder=${byRole.builder.name} (standalone loop; --ax forces the ax pipeline)`);
-    } else {
-      console.log('local · no non-ax builder available (no command-kind user lane, no keyed chat lane) - falling back to ax routing');
-      appendLog(record.id, 'LOCAL loop: no non-ax builder, ax kept as fallback');
+    if (byRole.builder && !laneDrivable(byRole.builder)) {
+      const next = bestDrivable(roster, 'builder', brief, laneDrivable);
+      if (next) {
+        byRole.builder = next;
+        appendLog(record.id, `builder ${routing.assignments.find((a) => a.role === 'builder')?.lane} has no driver; using ${next.name}`);
+        console.log(`builder · fit pick has no driver, using ${next.name}`);
+      }
+    } else if (byRole.builder) {
+      console.log(`builder by fit: ${byRole.builder.name}`);
     }
+  } else {
+    const axLane = roster.lanes.find((l) => l.invoke?.kind === 'ax' && laneDrivable(l));
+    if (axLane) byRole.builder = axLane;
   }
 
 
   // ---- quiet hours: refuse to spend inside the window (unless --override) --
   // the 3am promise: unattended loops don't burn quotas while you sleep.
   try {
+    const pinsNow = loadPins();
+    if (!pinsNow.quiet_hours) {
+      const inferred = inferQuietHours(listRuns());
+      if (inferred) {
+        pinsNow.quiet_hours = inferred;
+        savePins(pinsNow);
+        console.log(`quiet hours · learned ${inferred.start}–${inferred.end} from a week with no proven run in that window. --override spends anyway.`);
+      }
+    }
     const pinsQ = loadPins().quiet_hours;
     if (pinsQ && !flags.override) {
       const now = new Date();
@@ -214,7 +296,7 @@ export async function cmdGo(args, flags, { cwd = process.cwd() } = {}) {
       const { usageFromAudit } = await import('../meters.js');
       const usage = usageFromAudit();
       for (const m of meters) {
-        const p = pacing({ quota: m.quota_tokens, resetAt: m.reset_at, used: usage.get(m.lane)?.tokens || 0 });
+        const p = pacing({ quota: m.quota_tokens, resetAt: m.reset_at, used: m.used_tokens != null ? m.used_tokens : (usage.get(m.lane)?.tokens || 0) });
         if (p.state === 'empty') {
           const hrs = ((new Date(m.reset_at) - Date.now()) / 3.6e6);
           if (m.reset_at && hrs > 0 && hrs <= 6 && !flags.no_wait) {
@@ -231,7 +313,7 @@ export async function cmdGo(args, flags, { cwd = process.cwd() } = {}) {
           const { buildChain, pickStop } = await import('../fallback.js');
           // downshift only to lanes THIS loop can actually drive (a free lane
           // with no driver is a dead stop, not a fallback)
-          const drivable = roster.lanes.filter((l) => l.invoke?.kind === 'command' || (l.invoke?.kind === 'mcp' && l.invoke?.command) || (['openai-compatible', 'http-chat', 'chat'].includes(l.invoke?.kind) && chatLaneAvailable(l)));
+          const drivable = roster.lanes.filter((l) => laneDrivable(l) && (l.cost === 'free' || l.cost === 'plan'));
           const undrivable = roster.lanes.filter((l) => !drivable.includes(l)).map((l) => l.name);
           if (undrivable.length) appendLog(record.id, `CHAIN skipped undrivable lane(s): ${undrivable.join(', ')}`);
           const health = Object.fromEntries(drivable.map((l) => [l.name, l.invoke?.status || 'ok']));
@@ -275,12 +357,18 @@ export async function cmdGo(args, flags, { cwd = process.cwd() } = {}) {
   // ---- 1. plan -------------------------------------------------------------
   console.log('\n── plan ─────────────────────────────');
   let planText = null;
+  const planned = readRun(record.id)?.checkpoint;
+  if (resumed && planned?.phases?.includes('plan') && planned.planText) {
+    planText = planned.planText;
+    console.log('resume · plan checkpoint kept');
+    appendLog(record.id, 'RESUME plan checkpoint kept');
+  }
   const planner = byRole.planner;
-  if (planner && chatLaneAvailable(planner) && underBudget()) {
+  if (!planText && planner && chatLaneAvailable(planner) && underBudget()) {
     try {
       const res = await chatLane(planner, [
         { role: 'system', content: 'You are the planner of a coding cadre. Given a brief, produce a numbered plan of at most 6 concrete, checkable steps. Each step: verb, target, and how to verify it. No prose preamble.' },
-        { role: 'user', content: `Brief: ${brief}\nWorking directory contains a code project.` },
+        { role: 'user', content: `Brief: ${brief}\n\n${mapSlice}` },
       ], { max_tokens: 700 });
 meteredTokens += (res.usage?.total_tokens || 0);
       planText = res.text;
@@ -293,7 +381,7 @@ meteredTokens += (res.usage?.total_tokens || 0);
       console.log(`planner · ${planner.name} failed (${e.message.split('\n')[0]}) - falling back to local scaffold`);
     }
   }
-  if (!planText) {
+  if (!planText && !(resumed && planned?.phases?.includes('plan'))) {
     planText = [
       `1. read the brief: ${brief}`,
       '2. builder implements the change',
@@ -305,6 +393,7 @@ meteredTokens += (res.usage?.total_tokens || 0);
     console.log(planText.replace(/^/gm, '  '));
     appendLog(record.id, `PLAN (local scaffold):\n${planText}`);
   }
+  if (planText) markPhase(record.id, 'plan', { planText });
 
 
   // ---- 2. build (optionally raced across builders in isolated worktrees) ----
@@ -331,7 +420,7 @@ meteredTokens += (res.usage?.total_tokens || 0);
       if (bm && bm.quota_tokens != null) {
         const plan = pacePlan({
           quota: bm.quota_tokens, resetAt: bm.reset_at,
-          used: usage2.get(bm.lane)?.tokens || 0,
+          used: bm.used_tokens != null ? bm.used_tokens : (usage2.get(bm.lane)?.tokens || 0),
           rollover: bm.rollover_tokens || 0, windowHours: bm.window_hours || null,
           neededTokens: budgetTokens,
         });
@@ -348,7 +437,7 @@ meteredTokens += (res.usage?.total_tokens || 0);
           console.log(`pace · ${bm.lane} ${plan.note}`);
           globalThis.CADRE_WINDOW_BUCKETS = new Map([[bm.lane, windowBucket({
             quota: bm.quota_tokens, rollover: bm.rollover_tokens || 0,
-            used: usage2.get(bm.lane)?.tokens || 0, windowHours: bm.window_hours || 24,
+            used: bm.used_tokens != null ? bm.used_tokens : (usage2.get(bm.lane)?.tokens || 0), windowHours: bm.window_hours || 24,
           })]]);
         }
       }
@@ -388,7 +477,7 @@ meteredTokens += (res.usage?.total_tokens || 0);
         console.log(`race · ${slots.length} builders racing in isolated worktrees: ${slots.map((x) => x.lane.name).join(', ')}`);
         appendLog(record.id, `RACE start: ${slots.map((x) => x.lane.name).join(', ')} (worktrees: runs/${record.id}/race/)`);
         const settled = await Promise.allSettled(slots.map(async (x) => {
-          const res = await invokeLane(x.lane, brief, { timeoutMs: 1000 * 60 * 30, override: Boolean(flags.override), context: flags.context, cwd: x.dir, mcpAgent: Boolean(flags['mcp-agent']) });
+          const res = await invokeLane(x.lane, brief, { timeoutMs: 1000 * 60 * 30, override: Boolean(flags.override), context: flags.context, cwd: x.dir, mcpAgent: Boolean(flags['mcp-agent']), allowWrites: [x.dir] });
           return { ...x, res };
         }));
         const test = detectTestCommand(cwd);
@@ -441,29 +530,79 @@ stampUsage(record.id);
     appendLog(record.id, 'RACE off: not a git repo (worktrees unavailable)');
   }
 
-  if (builder && !raced) {
+  const buildCheckpoint = readRun(record.id)?.checkpoint;
+  if (builder && !raced && resumed && buildCheckpoint?.phases?.includes('build')) {
+    buildOutput = buildCheckpoint.buildOutput || '';
+    console.log('resume · build checkpoint kept');
+    appendLog(record.id, 'RESUME build checkpoint kept');
+  } else if (builder && !raced) {
     try {
       console.log(`builder · ${builder.name} on the task`);
-      const res = await invokeLane(builder, brief, { timeoutMs: 1000 * 60 * 30, override: Boolean(flags.override), context: flags.context, cwd, mcpAgent: Boolean(flags["mcp-agent"]) });
+      let tasked = brief;
+      try {
+        const { skillsBrief } = await import('../skills.js');
+        const skills = skillsBrief();
+        if (skills) appendLog(record.id, `SKILLS:\n${skills}`);
+        tasked = `${skills ? `${skills}\n\n` : ''}${mapSlice}\n\n${brief}`;
+      } catch { tasked = `${mapSlice}\n\n${brief}`; }
+      const runBuilder = async (lane) => invokeLane(lane, tasked, { timeoutMs: 1000 * 60 * 30, override: Boolean(flags.override), context: flags.context, cwd, mcpAgent: Boolean(flags['mcp-agent']), allowWrites: lockSpecs(manifest, cwd), runId: record.id });
+      let res;
+      try {
+        res = await runBuilder(builder);
+      } catch (e) {
+        if (e.code === 'CADRE_RATE_LIMITED') {
+          const next = bestDrivable({ lanes: roster.lanes.filter((l) => l.name !== builder.name && (l.cost === 'free' || l.cost === 'plan')) }, 'builder', brief, laneDrivable);
+          if (!next) throw e;
+          console.log(`builder · ${builder.name} rate-limited, downshift to ${next.name}`);
+          appendLog(record.id, `RATE LIMIT downshift ${builder.name} -> ${next.name}`);
+          builder = next;
+          res = await runBuilder(builder);
+        } else throw e;
+      }
+      if (res?.waiting) {
+        appendLog(record.id, `SLACK waiting: ${res.error || 'inbox'}`);
+        console.log(`slack · waiting · write the reply to inbox/${record.id}.txt then cadre go --resume ${record.id}`);
+        updateRun(record.id, { status: 'resumed-brief', verdict: { passed: false, summary: `waiting for slack reply inbox/${record.id}.txt` } });
+        stampUsage(record.id);
+        releaseLock(record.id, 'slack-wait');
+        return 3;
+      }
       buildOutput = res.stdout || res.text || '';
-      // B5 frugal pipes: compress before the ledger; original backed up, savings counted
-      const { compressOutput } = await import('../frugal.js');
-      const frugal = compressOutput(buildOutput, { backupDir: join(home(), 'runs', record.id, 'frugal-backups'), label: 'build' });
+      const { forContext } = await import('../frugal.js');
+      const frugal = forContext(buildOutput, { backupDir: join(home(), 'runs', record.id, 'frugal-backups'), label: 'build' });
       buildOutput = frugal.text;
-      appendLog(record.id, `BUILD (${builder.name}) [frugal: ${frugal.originalBytes}→${frugal.compressedBytes} bytes, ${frugal.saved} saved${frugal.restorable ? ', original backed up' : ''}]:\n${buildOutput.slice(0, 20000)}`);
+      appendLog(record.id, `BUILD (${builder.name}) [frugal in: map slice, out: ${frugal.originalBytes}→${frugal.compressedBytes} bytes, ${frugal.saved} saved${frugal.restorable ? ', original backed up' : ''}]:\n${buildOutput.slice(0, 20000)}`);
       console.log(buildOutput.split('\n').slice(-12).join('\n').replace(/^/gm, '  '));
-      // citation: the ax run log, if the builder went through ax
       const axRun = /run-\d{8}-\d{6}/.exec(buildOutput);
       if (axRun) {
         await addEvidence(record.id, { kind: 'citation', label: `builder log (${builder.name})`, ref: `~/.config/ax/runs/${axRun[0]}` });
       }
+      markPhase(record.id, 'build', { buildOutput, builder: builder.name });
     } catch (e) {
+      if (e.code === 'CADRE_PACED') {
+        appendLog(record.id, `PACE pause: ${e.message}`);
+        console.log(`pace · ${e.message}`);
+        updateRun(record.id, { status: 'checkpointed', verdict: { passed: false, summary: e.message } });
+        stampUsage(record.id);
+        releaseLock(record.id, 'paced');
+        console.log(`resume · cadre go --resume ${record.id}`);
+        return 3;
+      }
+      if (e.code === 'CADRE_RATE_LIMITED' || e.code === 'CADRE_PACED') {
+        appendLog(record.id, `PAUSE: ${e.message}`);
+        updateRun(record.id, { status: 'checkpointed', verdict: { passed: false, summary: e.message } });
+        stampUsage(record.id);
+        releaseLock(record.id, 'paused');
+        console.log(`resume · cadre go --resume ${record.id}`);
+        return 3;
+      }
       buildOutput = e.stdout || '';
       const axTail = String(e.stdout || e.stderr || e.message).trim().split('\n').filter(Boolean).slice(-5).join('\n      ');
       console.error(`builder · ${builder.name} failed: ${e.message.split('\n')[0]}`);
       if (axTail) console.error(`      ${axTail}`);
       appendLog(record.id, `BUILD FAILED (${builder.name}): ${e.message.slice(0, 2000)}`);
       await updateRun(record.id, { status: 'failed', ended: new Date().toISOString() });
+      stampUsage(record.id);
       audit({ kind: 'run-end', run: record.id, status: 'failed' });
       releaseLock(record.id, 'build-failed');
       return 1;
@@ -471,6 +610,7 @@ stampUsage(record.id);
   } else if (!raced) {
     console.error('builder · no fitting lane - roster too thin to build');
     await updateRun(record.id, { status: 'failed', ended: new Date().toISOString() });
+    stampUsage(record.id);
     releaseLock(record.id, 'no-builder');
     return 1;
   }
@@ -522,6 +662,11 @@ stampUsage(record.id);
       }
       console.log(`diffs · ${after.numstat.split('\n').filter(Boolean).length} file(s) changed`);
     }
+    try { diffsTextForCritic = execFileSync('git', ['-C', cwd, 'diff', 'HEAD'], { encoding: 'utf-8', maxBuffer: 1024 * 1024 * 8 }); } catch { diffsTextForCritic = ''; }
+    try {
+      const { forContext } = await import('../frugal.js');
+      diffsTextForCritic = forContext(diffsTextForCritic).text;
+    } catch { /* critic still gets the unfiltered diff */ }
   }
 
 
@@ -531,20 +676,44 @@ stampUsage(record.id);
   // ---- 3+4. critique ∥ verify ------------------------------------------------
   // independent readers of the built tree: run in parallel, one stream shows both
   console.log('\n── critique ∥ verify (parallel) ─────');
+  let critiqueText = '';
+  let verifyRan = null;
   const critiqueTask = (async () => {
   console.log('\n── critique ─────────────────────────');
+  if (resumed && (readRun(record.id)?.checkpoint?.phases || []).includes('critique')) {
+    console.log('resume · critique checkpoint kept');
+    appendLog(record.id, 'RESUME critique checkpoint kept');
+    return;
+  }
   const critic = byRole.critic;
-  if (critic && chatLaneAvailable(critic) && underBudget()) {
+  let reviewed = false;
+  if (critic && (critic.invoke?.kind === 'hand' || critic.invoke?.kind === 'agent') && underBudget()) {
+    try {
+      const { forContext } = await import('../frugal.js');
+      const packed = forContext(`Brief: ${brief}\n\n${buildOutput.slice(-4000)}`).text;
+      const res = await invokeLane(critic, packed, { timeoutMs: 1000 * 60 * 10, cwd, allowWrites: lockSpecs(manifest, cwd) });
+      critiqueText = (res.stdout || res.text || res.error || '').slice(0, 4000);
+      appendLog(record.id, `CRITIQUE (${critic.name}):\n${critiqueText}`);
+      await addEvidence(record.id, { kind: 'citation', label: `critic (${critic.name}) review`, ref: `runs/${record.id}/run.log#critique` });
+      console.log(`critic · ${critic.name}`);
+      reviewed = Boolean(res.ok);
+    } catch (e) {
+      console.log(`critic · ${critic.name} failed (${e.message.split('\n')[0]})`);
+    }
+  }
+  if (reviewed) { /* the named critic answered */ }
+  else if (critic && chatLaneAvailable(critic) && underBudget()) {
     try {
       const res = await chatLane(critic, [
         { role: 'system', content: 'You are the critic of a coding cadre. Review the builder output below against the brief. List concrete findings with file references where possible. If nothing is wrong, say CLEAN.' },
-        { role: 'user', content: `Brief: ${brief}\n\nBuilder output (tail):\n${buildOutput.slice(-4000)}` },
+        { role: 'user', content: `Brief: ${brief}\n\n${mapSlice}\n\nBuilder output (tail):\n${buildOutput.slice(-4000)}` },
       ], { max_tokens: 600 });
       meteredTokens += (res.usage?.total_tokens || 0);
       auditCall(record.id, critic.name, res);
       await addEvidence(record.id, { kind: 'citation', label: `critic (${critic.name}) review`, ref: `runs/${record.id}/run.log#critique` });
       console.log(`critic · ${critic.name}:`);
       console.log(res.text.replace(/^/gm, '  '));
+      critiqueText = res.text;
       appendLog(record.id, `CRITIQUE (${critic.name}):\n${res.text}`);
     } catch (e) {
       console.log(`critic · skipped (${e.message.split('\n')[0]})`);
@@ -558,8 +727,9 @@ stampUsage(record.id);
       const changed = (changedFilesList || []).map((c) => c.file);
       const rr = criticRules({ brief, changed, diffsText: diffsTextForCritic || '', manifest: scopeManifest, evidenceKinds: evidenceKindsForCritic || [] });
       console.log(`critic · rules tier (no chat lane on this machine):`);
-      console.log(renderCriticRules(rr).replace(/^/gm, '  ') || '  (no findings)');
-      appendLog(record.id, `CRITIQUE (rules tier):\n${renderCriticRules(rr)}`);
+      critiqueText = renderCriticRules(rr);
+      console.log(critiqueText.replace(/^/gm, '  ') || '  (no findings)');
+      appendLog(record.id, `CRITIQUE (rules tier):\n${critiqueText}`);
       await addEvidence(record.id, { kind: 'citation', label: 'critic (rules tier) review', ref: `runs/${record.id}/run.log#critique` });
       if (rr.findings.some((f) => f.severity === 'high')) {
         appendLog(record.id, 'CRITIQUE rules tier: HIGH findings present - see above');
@@ -569,14 +739,21 @@ stampUsage(record.id);
       appendLog(record.id, `CRITIQUE rules tier failed: ${e.message.slice(0, 300)}`);
     }
   }
+  markPhase(record.id, 'critique');
 
   })();
 
   const verifyTask = (async () => {
   console.log('\n── verify (in parallel with critique) ──');
+  if (resumed && (readRun(record.id)?.checkpoint?.phases || []).includes('verify')) {
+    console.log('resume · verify checkpoint kept');
+    appendLog(record.id, 'RESUME verify checkpoint kept');
+    return;
+  }
   const test = detectTestCommand(cwd);
   let verifyEv = null;
   if (test) {
+    verifyRan = true;
     try {
       const { stdout } = await run(test.cmd, test.args, { cwd, timeout: 1000 * 60 * 10, maxBuffer: 1024 * 1024 * 16 });
       verifyEv = { kind: 'command', label: test.label, by: 'verifier', command: `${test.cmd} ${test.args.join(' ')}`, argv: [test.cmd, ...test.args], exit: 0, output: stdout.slice(0, 4000) };
@@ -592,6 +769,7 @@ stampUsage(record.id);
     console.log('verifier · no project test command detected (package.json/Makefile/Cargo.toml/pyproject.toml)');
     appendLog(record.id, 'VERIFY skipped: no test command detected');
   }
+  markPhase(record.id, 'verify');
   })();
 
   // both run concurrently; the single stream interleaves them as they happen
@@ -599,41 +777,100 @@ stampUsage(record.id);
 
   // ---- 5. gate --------------------------------------------------------------
   console.log('\n── gate ─────────────────────────────');
-  // scope-creep check (PRD 6.6): diff outside the lock is caught here, with citation
-  if (after && after.porcelain.trim().length > 0) {
-    const changed = after.numstat.split('\n').filter(Boolean).map((l) => l.split('\t')[2]);
-    changedFilesList = (changed || []).map((f) => ({ file: f }));
+  // Re-read the manifest the run locked. Drift (a new file, an un-asked
+  // refactor) is named here, and the work does not count until that is answered.
+  const fresh = readScopeFile(join(cwd, '.cadre', 'scope.json'))
+    || readScopeFile(join(home(), 'runs', record.id, 'scope.json'))
+    || manifest;
+  appendLog(record.id, `SCOPE re-read: lock ${fresh.lock.join(' ')} · done ${String(fresh.done).slice(0, 160)}`);
+  const now = await gitState(cwd);
+  let delta = [];
+  if (before && now) {
+    delta = runDeltaFiles(before, now);
     try { diffsTextForCritic = execFileSync('git', ['-C', cwd, 'diff', 'HEAD'], { encoding: 'utf-8', maxBuffer: 1024 * 1024 * 8 }); } catch { diffsTextForCritic = ''; }
-    const creep = scopeCreep(changed, manifest);
-    if (creep.length > 0) {
-      appendLog(record.id, `SCOPE CREEP caught at gate: ${creep.join(', ')} (lock: ${manifest.lock.join(' ')}) — "not in the ask"`);
-      console.log(`scope · ✗ creep caught: ${creep.join(', ')} — not in the ask (see run.log)`);
-      const cur = updateRun(record.id, {
+  } else if (globalThis.CADRE_FS_SNAPSHOT) {
+    delta = fsDiff(globalThis.CADRE_FS_SNAPSHOT, fsSnapshot(cwd)).map((c) => c.file);
+  } else {
+    delta = (changedFilesList || []).map((c) => c.file || c);
+  }
+  try {
+    const { forContext } = await import('../frugal.js');
+    if (diffsTextForCritic) diffsTextForCritic = forContext(diffsTextForCritic).text;
+  } catch { /* critic still sees the raw diff */ }
+  const creep = scopeCreep(delta, fresh);
+  if (creep.length > 0) {
+    let why = typeof flags.why === 'string' ? flags.why : '';
+    if (!why && process.stdin.isTTY) {
+      try {
+        const { askHuman } = await import('../human.js');
+        const ans = await askHuman(`why are these files outside the lock: ${creep.join(', ')}? Name each file in the answer, or press enter to reject.`, { timeoutMs: 60000 });
+        if (ans) why = ans;
+      } catch { /* non-interactive */ }
+    }
+    const prior = new Set(globalThis.CADRE_FS_SNAPSHOT ? globalThis.CADRE_FS_SNAPSHOT.keys() : []);
+    const settled = settleCreep({ creep, why, cwd, prior });
+    if (settled.action === 'allow') {
+      fresh.lock = [...new Set([...fresh.lock, ...creep])];
+      writeScopeFile(join(cwd, '.cadre', 'scope.json'), fresh);
+      appendLog(record.id, `SCOPE why accepted: ${why}`);
+      try { const { noteCorrection } = await import('../skills.js'); noteCorrection(why); } catch { /* a skill file is not the gate */ }
+      console.log(`scope · why accepted, lock now ${fresh.lock.join(' ')}`);
+    } else {
+      const whyLine = `gate asks why: ${creep.join(', ')} is outside the scope lock (${fresh.lock.join(' ')}). Answer with --why naming each file, or the write is reverted.`;
+      appendLog(record.id, `SCOPE CREEP: ${whyLine} reverted: ${settled.reverted.map((r) => `${r.file}=${r.result}`).join(', ')}`);
+      console.log(`scope · ✗ ${whyLine}`);
+      updateRun(record.id, {
         status: 'rejected',
-        verdict: { passed: false, missing: [], summary: `scope creep: ${creep.join(', ')}` },
+        verdict: { passed: false, missing: [], summary: whyLine },
         ended: new Date().toISOString(),
       });
-stampUsage(record.id);
+      stampUsage(record.id);
       audit({ kind: 'run-end', run: record.id, status: 'rejected', creep });
+      try { const { learnFromRun } = await import('../map.js'); learnFromRun(cwd, { files: delta, passed: false, lane: byRole.builder?.name }); } catch { /* map learns when it can */ }
+      try { notePreferences(record.roles, flags, { passed: false, creep: true, tokens: meteredTokens, planText, delta, critique: critiqueText, verified: verifyRan }); } catch { /* preference ledger is best-effort */ }
+      try { await rememberHands(byRole, { brief, delta, passed: false, critique: critiqueText }); } catch { /* hand memory is best-effort */ }
       releaseLock(record.id, 'rejected-scope-creep');
       console.log(`\n✗ run ${record.id} REJECTED - work outside the scope lock`);
       return 1;
-    } else if (flags.scope) {
-      console.log('scope · ✓ all changes inside the lock');
     }
   }
+  if (delta.length) console.log('scope · ✓ changes inside the lock');
   const cur = updateRun(record.id, {
     status: 'gating',
     usage: { metered_tokens: meteredTokens, budget_tokens: budgetTokens },
   });
+  // DONE-CONDITION: the manifest's explicit done statement is checked BEFORE
+  // the gate stamps anything - a run can hold all four families and still not
+  // be the work that was asked for.
+  let doneCheck = { checked: false, ok: null, note: '' };
+  try {
+    doneCheck = checkDoneCondition(fresh, {
+      changedFiles: (changedFilesList || []).map((c) => c.file || c),
+      cwd,
+    });
+    appendLog(record.id, `DONE-CONDITION: ${doneCheck.note}`);
+    if (doneCheck.checked) console.log(`done · ${doneCheck.ok ? '✓' : '✗'} ${doneCheck.note}`);
+  } catch (e) { appendLog(record.id, `DONE-CONDITION check error: ${String(e.message).slice(0, 200)}`); }
   const gate = gateVerdict(cur, { cwd });
+  if (gate.passed && meteredTokens > budgetTokens) {
+    gate.passed = false;
+    gate.failed.push({ family: 'budget', ok: false, label: 'token budget', detail: `${meteredTokens} > ${budgetTokens}` });
+    gate.summary = `budget exceeded: ${meteredTokens} > ${budgetTokens}`;
+  }
+  if (gate.passed && doneCheck.checked && doneCheck.ok === false) {
+    gate.passed = false;
+    gate.failed.push({ family: 'done-condition', ok: false, label: 'manifest done-condition', detail: doneCheck.note });
+    gate.summary = `done-condition unmet: ${doneCheck.note.slice(0, 120)}`;
+  }
   console.log(renderGateReport(gate).replace(/^/gm, '  '));
   appendLog(record.id, `GATE ${gate.passed ? 'PROVEN' : 'NOT PROVEN'}: ${gate.summary}`);
 
+  let reverifyOk = true;
   if (flags['re-verify'] !== false && gate.passed) {
     const reverified = await verifyCommands(cur, { cwd, max: 2 });
     for (const rv of reverified) {
       if (!rv.ok) {
+        reverifyOk = false;
         gate.passed = false;
         gate.failed.push({ family: 'commands', label: rv.command, detail: `re-run exited ${rv.reexit}` });
         console.log(`  ✗ re-verify: ${rv.command} exited ${rv.reexit}`);
@@ -641,6 +878,28 @@ stampUsage(record.id);
     }
   }
 
+  try {
+    const { checkSkills } = await import('../skillcheck.js');
+    const { noteCorrection } = await import('../skills.js');
+    const line = String(critiqueText).split('\n').map((s) => s.trim()).find((s) => s.length >= 12 && !/CLEAN/i.test(s));
+    if (line) noteCorrection(line);
+    const log = readFileSync(join(home(), 'runs', record.id, 'run.log'), 'utf-8');
+    const skills = checkSkills(log, {
+      gatePassed: gate.passed,
+      mapFiles,
+      indexedFiles,
+      diffFiles: delta,
+      brief,
+      laneOutput: buildOutput,
+      laneKind: builder?.invoke?.kind || null,
+      reverified: flags['re-verify'] === false ? true : reverifyOk,
+    });
+    if (gate.passed && !skills.ok) {
+      gate.passed = false;
+      gate.summary = `skills unmet: ${skills.missing.join(', ')}`;
+      console.log(`skills · unmet: ${skills.missing.join(', ')}`);
+    }
+  } catch { /* a missing skill file does not invent a pass */ }
   const finalStatus = gate.passed ? 'passed' : 'rejected';
   updateRun(record.id, {
     status: finalStatus,
@@ -650,6 +909,12 @@ stampUsage(record.id);
   audit({ kind: 'run-end', run: record.id, status: finalStatus, metered_tokens: meteredTokens });
   releaseLock(record.id, finalStatus);
 
+  try {
+    const { learnFromRun } = await import('../map.js');
+    learnFromRun(cwd, { files: delta, passed: gate.passed, lane: byRole.builder?.name || null });
+  } catch { /* a missing map never blocks the verdict */ }
+  try { notePreferences(record.roles, flags, { passed: gate.passed, creep: false, tokens: meteredTokens, planText, delta, critique: critiqueText, verified: verifyRan }); } catch { /* preference ledger is best-effort */ }
+  try { await rememberHands(byRole, { brief, delta, passed: gate.passed, critique: critiqueText }); } catch { /* hand memory is best-effort */ }
   console.log(`\n${gate.passed ? '✓' : '✗'} run ${record.id} ${gate.passed ? 'PROVEN' : `not proven - ${gate.summary}`}`);
   console.log(`  metered ${meteredTokens} of ${budgetTokens} token budget · proof: cadre proof ${record.id} · replay: cadre watch ${record.id}`);
   return gate.passed ? 0 : 1;

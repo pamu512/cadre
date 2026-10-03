@@ -1,0 +1,10 @@
+{
+  "name": "terra",
+  "identity": "terra reviews",
+  "good_at": ["review"],
+  "cost": "plan",
+  "talks": "terminal",
+  "proves": "verdict",
+  "craft": ["take-review-feedback"],
+  "invoke": { "kind": "hand", "persists": true, "skill": "verify-before-claiming" }
+}

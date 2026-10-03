@@ -1,13 +1,13 @@
 # Cadre — Product Requirements Document
 
 **Status:** draft for review · **Version:** 0.1 · **Date:** 2026-10-02
-**Owner:** pamu · **Repo:** `cadre/` · **Concept page:** `../V1 Cadre.html` · **Research:** `../research/muster-market-20261001-1930/`
+**Owner:** pamu · **Repo:** `cadre/` · **Concept page:** `../V1 Cadre.html` · **Research:** market notes, 2026-10-01
 
 ---
 
 ## 1. Summary
 
-Cadre is a **model/bot-agnostic agent harness**: a local-first CLI that turns any model, CLI agent, GUI bot, MCP server — or human — into an interchangeable **lane**, musters a fitted crew per ask, and refuses to mark work **done** unless a **gate** holds checkable evidence.
+Cadre is a **model/bot-agnostic agent harness**: a local-first CLI that turns any model, CLI agent, GUI bot, MCP server — or human — into an interchangeable **lane**, forms a fitted crew per ask, and refuses to mark work **done** unless a **gate** holds checkable evidence.
 
 One line: **any model, any bot, one command — and done means proven.**
 
@@ -154,7 +154,7 @@ Priorities: **P0** = trust core (without these it isn't Cadre) · **P1** = econo
 
 ## 13. References
 
-- Market deep-research (6 dives, ~110 searches, graded): `../research/muster-market-20261001-1930/` (see `insight.md`, `verify.md`)
+- Market deep-research (6 dives, ~110 searches, graded), 2026-10-01
 - Concept page (12-command grammar, anatomy): `../V1 Cadre.html`
 - Live harness (reference implementation of debate + evidence gate): `~/.local/bin/ax`, audit at `~/.config/ax/`
 - Key external: MAST arXiv:2503.13657 · the closest competitor (closest competitor) · "Safe to Resume?" arXiv:2608.29381 · IETF draft-sharif-agent-audit-trail

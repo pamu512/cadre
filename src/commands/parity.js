@@ -5,7 +5,8 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { existsSync, appendFileSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, appendFileSync, mkdirSync, readFileSync, writeFileSync, readdirSync, unlinkSync } from 'node:fs';
 import { createRun, updateRun, appendLog, addEvidence, audit, home, runDir } from '../store.js';
 
 const run = promisify(execFile);
@@ -98,40 +99,32 @@ export async function cmdParity(args, flags) {
     console.log(`\nparity verify: ${v.closed}/${v.total} closed · ${v.open} open (ledger rows filed)`);
     return v.open === 0 ? 0 : 1;
   }
-  // --until-proven: loop verify -> build-open-behaviors -> re-verify until the
-  // contract closes, the iteration cap hits, or 2 consecutive builds fail to
-  // move the count (circuit breaker). Every stop reason is stated.
+  // --until-proven: loop failing checks -> builder -> re-check. A line closes
+  // only when its own check passes. Stretch runs after core, and only when the
+  // goal asks. The lap cap checkpoints; budget and a no-progress breaker stop.
   if (flags['until-proven']) {
-    const ref = String(flags.ref || '');
-    if (!ref || !existsSync(ref)) {
-      console.error('parity --until-proven requires --ref <file>');
-      return 2;
-    }
-    const cwd = typeof flags.cwd === 'string' ? flags.cwd : process.cwd();
-    const maxIter = Math.max(1, Math.min(Number(flags['max-iter']) || 5, 20));
-    // stretch detection: bullets under an explicit stretch/future/non-goal/
-    // nice-to-have heading are PROPOSED, never part of parity - they can't
-    // block closure and the loop never builds them.
-    const extractFull = () => {
-      const lines = readFileSync(ref, 'utf-8').split('\n').map((l) => l.trim());
-      const core = [];
-      const stretch = [];
-      let inStretch = false;
-      for (const l of lines) {
-        if (/^#{1,4}\s+/.test(l)) {
-          // headings set core/stretch mode; they are never behaviors themselves
-          inStretch = /stretch|future|non-goal|nice-to-have|later|out of scope/i.test(l);
-          continue;
-        }
-        if (/^[-*=#]{3,}$/.test(l) || l.length <= 8) continue;
-        const clean = l.replace(/^[-*]\s+/, '');
-        if (!clean || !/^\S/.test(clean)) continue;
-        (inStretch ? stretch : core).push(clean);
+    let ref = String(flags.ref || '');
+    let cwd = typeof flags.cwd === 'string' ? flags.cwd : process.cwd();
+    let goal = args.join(' ').trim();
+    const checkpointPath = join(home(), 'parity-checkpoint.json');
+    if (flags.resume) {
+      let saved = null;
+      try { saved = JSON.parse(readFileSync(checkpointPath, 'utf-8')); } catch { /* none */ }
+      if (!saved) {
+        console.error('parity --resume: no checkpoint. Run parity --until-proven first.');
+        return 2;
       }
-      return { core: core.slice(0, 40), stretch: stretch.slice(0, 15) };
-    };
-    const extract = () => extractFull().core;
-    const { verifyContract } = await import('../behaviorcheck.js');
+      if (!ref) ref = saved.ref || '';
+      if (typeof flags.cwd !== 'string' && saved.cwd) cwd = saved.cwd;
+      if (!goal && saved.goal) goal = saved.goal;
+      console.log(`parity loop · resuming ${saved.phase || 'core'} from checkpoint`);
+    }
+    const maxIter = Math.max(1, Math.min(Number(flags['max-iter']) || 20, 50));
+    const { buildScopeManifest, writeScopeFile, readScopeFile } = await import('../scope.js');
+    const { splitSpec, wantsBeyond, verifyContract, parseCheck } = await import('../behaviorcheck.js');
+    const beyond = wantsBeyond(goal);
+    const scopePath = join(cwd, '.cadre', 'scope.json');
+    writeScopeFile(scopePath, buildScopeManifest({ brief: `parity ${ref || cwd}`, cwd, scope: typeof flags.scope === 'string' ? flags.scope : '**' }));
     const testCmd = (() => {
       try {
         const pkg = JSON.parse(readFileSync(join(cwd, 'package.json'), 'utf-8'));
@@ -178,59 +171,141 @@ export async function cmdParity(args, flags) {
     };
     let lastClosed = 0;
     let lastOpen = 0;
-    // stretch items: proposed once, never built, never blocking parity
-    const stretchItems = extractFull().stretch;
-    if (stretchItems.length) {
-      console.log(`\nparity loop · ${stretchItems.length} stretch item(s) PROPOSED (not in the contract; never built without your say-so):`);
-      for (const st of stretchItems.slice(0, 5)) console.log(`  ~ ${st.slice(0, 100)}`);
-      for (const st of stretchItems) {
+    let spec = { core: [], stretch: [], excluded: [] };
+    if (ref) {
+      if (!existsSync(ref)) {
+        console.error(`parity --until-proven: --ref is not a file (${ref})`);
+        return 2;
+      }
+      spec = splitSpec(readFileSync(ref, 'utf-8'));
+    } else if (!testCmd) {
+      console.error('parity --until-proven needs --ref <file> or a project test command');
+      return 2;
+    } else {
+      let suiteOut = '';
+      let suiteCode = 0;
+      try {
+        await run(testCmd.cmd, testCmd.args, { cwd, timeout: 1000 * 60 * 5, maxBuffer: 1024 * 1024 * 8 });
+      } catch (e) {
+        suiteCode = e.code ?? 1;
+        suiteOut = `${e.stdout || ''}\n${e.stderr || ''}`;
+      }
+      if (suiteCode === 0) {
+        console.log('parity loop · test suite already green');
+        return 0;
+      }
+      const names = [...suiteOut.matchAll(/^not ok \d+ - (.+)$/gm)].map((m) => m[1].trim()).filter(Boolean);
+      const label = `${testCmd.cmd} ${testCmd.args.join(' ')}`.trim();
+      spec.core = names.length ? [...new Set(names)].map((n) => `test ${n} passes`) : [`command: ${label}`];
+      ref = `${cwd} tests`;
+    }
+    const named = (list) => list.filter((b) => parseCheck(b));
+    const coreChecks = named(spec.core);
+    if (spec.core.length && !coreChecks.length) {
+      console.error('parity loop · spec names no checks (command, file contains, test name, or path exists) — refusing to claim parity');
+      for (const b of spec.core) console.log(`  not checkable: ${b.slice(0, 120)}`);
+      return 2;
+    }
+    for (const b of spec.core) if (!parseCheck(b)) console.log(`parity loop · not checkable, not built: ${b.slice(0, 120)}`);
+    for (const b of spec.excluded) console.log(`parity loop · excluded, not built: ${b.slice(0, 120)}`);
+    const stretchChecks = named(spec.stretch);
+    if (!beyond && spec.stretch.length) {
+      console.log(`\nparity loop · ${spec.stretch.length} stretch item(s) PROPOSED (not in the contract; never built without your say-so):`);
+      for (const st of spec.stretch.slice(0, 5)) console.log(`  ~ ${st.slice(0, 100)}`);
+      for (const st of spec.stretch) {
         appendFileSync(ledgerPath, JSON.stringify({
           ts: new Date().toISOString(), run: 'stretch', target: st.slice(0, 200), ref,
           verdict: 'stretch-proposed', evidence_count: 0, citation: '',
           reason: 'beyond parity - proposed only, requires your approval to build',
         }) + '\n');
       }
+    } else if (beyond) {
+      for (const b of spec.stretch) if (!parseCheck(b)) console.log(`parity loop · stretch not checkable, not built: ${b.slice(0, 120)}`);
+      if (stretchChecks.length) console.log(`parity loop · ${stretchChecks.length} stretch check(s) run after core is green`);
+    }
+    if (!coreChecks.length && !(beyond && stretchChecks.length)) {
+      console.error('parity loop · spec names no checks (command, file contains, test name, or path exists) — refusing to claim parity');
+      return 2;
     }
     const laneSpend = new Map();
     let noMoveStreak = 0;
     let prevClosed = -1;
     let lapsBurned = 0;
-    for (let iter = 1; iter <= maxIter; iter++) {
-      if (!underBudget()) {
-        console.log(`parity loop · BUDGET EXHAUSTED (${meteredTokens} >= ${budgetTokens} tok) after ${iter - 1} lap(s) - stopping honestly`);
-        fileSummary();
-        return 7;
-      }
-      const v = await verifyContract(extract(), cwd, { testCmd, refPath: ref });
-      lapsBurned = iter;
-      fileLap(iter, v.results, ref);
-      console.log(`\nparity loop · iteration ${iter}/${maxIter}: ${v.closed}/${v.total} closed (ledger rows filed: ${v.results.length})`);
-      const open = v.results.filter((r) => !r.closed);
-      lastClosed = v.closed; lastOpen = v.open;
-      for (const r of open.slice(0, 5)) console.log(`  open [${r.kind}] ${r.behavior.slice(0, 90)}\n      ${r.reason}`);
-      if (open.length === 0) {
-        console.log('parity loop · ALL BEHAVIORS CLOSED - contract matches the build');
-        fileSummary();
-        return 0;
-      }
-      if (v.closed === prevClosed) {
-        noMoveStreak += 1;
-        if (noMoveStreak >= 2) {
-          console.log(`parity loop · CIRCUIT BREAKER: 2 iterations without closing a behavior - stopping honestly (${v.closed}/${v.total})`);
-          return 4;
+    const saveCheckpoint = (phase) => {
+      writeFileSync(checkpointPath, JSON.stringify({ ref, cwd, goal, phase, at: new Date().toISOString() }, null, 2));
+      console.log(`parity loop · checkpoint after ${maxIter} lap(s) on ${phase}. continue: cadre parity --until-proven --resume last`);
+    };
+    const drive = async (behaviors, phase) => {
+      noMoveStreak = 0;
+      prevClosed = -1;
+      for (let iter = 1; iter <= maxIter; iter++) {
+        if (!underBudget()) {
+          console.log(`parity loop · BUDGET EXHAUSTED (${meteredTokens} >= ${budgetTokens} tok) after ${iter - 1} lap(s) - stopping honestly`);
+          fileSummary();
+          return 7;
         }
-      } else noMoveStreak = 0;
-      prevClosed = v.closed;
+        const locked = readScopeFile(scopePath);
+        if (!locked) {
+          console.log('parity loop · scope lock missing on re-read — stopping');
+          fileSummary();
+          return 6;
+        }
+        console.log(`parity loop · scope re-read: ${locked.lock.join(' ')}`);
+        const v = await verifyContract(behaviors, cwd, { testCmd, refPath: ref });
+        const open = v.results.filter((r) => !r.closed);
+        const closedN = v.results.length - open.length;
+        lapsBurned = iter;
+        fileLap(iter, v.results, ref);
+        console.log(`\nparity loop · ${phase} ${iter}/${maxIter}: ${closedN}/${v.results.length} closed (ledger rows filed: ${v.results.length})`);
+        lastClosed = closedN;
+        lastOpen = open.length;
+        for (const r of open.slice(0, 5)) console.log(`  open [${r.kind}] ${r.behavior.slice(0, 90)}\n      ${r.reason}`);
+        if (open.length === 0) return 'closed';
+        if (closedN === prevClosed) {
+          noMoveStreak += 1;
+          if (noMoveStreak >= 2) {
+            console.log(`parity loop · CIRCUIT BREAKER: 2 iterations without closing a behavior - stopping honestly (${closedN}/${v.results.length})`);
+            for (const r of open) console.log(`  still open: ${r.behavior.slice(0, 100)} — ${r.reason}`);
+            return 4;
+          }
+        } else noMoveStreak = 0;
+        prevClosed = closedN;
       // build toward the OPEN behaviors: hand them to the best builder lane
       const roster = await buildRoster();
-      const builder = roster.lanes.find((l) => l.invoke?.kind === 'command') || null;
+      const { assignRoles, bestDrivable } = await import('../router.js');
+      const { laneDrivable } = await import('../invoke.js');
+      const routed = assignRoles(roster, { brief: open.slice(0, 3).map((r) => r.behavior).join('\n') });
+      const picked = roster.lanes.find((l) => l.name === routed.assignments.find((a) => a.role === 'builder')?.lane);
+      const builder = (picked && laneDrivable(picked)) ? picked : bestDrivable(roster, 'builder', open.map((r) => r.behavior).join('\n'), laneDrivable);
       if (!builder) {
-        console.log('parity loop · no file-acting builder lane available - stopping (declare one in ~/.cadre/lanes/)');
+        console.log('parity loop · no file-acting builder lane available - stopping (scanned CLIs are presence-only)');
         return 3;
       }
-      const brief = `Close these parity behaviors in ${cwd}:\n${open.slice(0, 10).map((r, i) => `${i + 1}. ${r.behavior.slice(0, 140)}`).join('\n')}`;
+      const brief = `Close these failing checks in ${cwd}:\n${open.slice(0, 10).map((r, i) => `${i + 1}. ${r.behavior}\n   failed: ${String(r.reason || '').slice(0, 300)}`).join('\n')}`;
       console.log(`parity loop · builder ${builder.name} on ${Math.min(open.length, 10)} open behavior(s)`);
-      const res = await invokeLane(builder, brief, { timeoutMs: 1000 * 60 * 30, cwd });
+      const { lockSpecs, scopeCreep, settleCreep } = await import('../scope.js');
+      const { readdirSync: readNames } = await import('node:fs');
+      const walk = (dir, prefix, into) => {
+        let entries;
+        try { entries = readNames(dir, { withFileTypes: true }); } catch { return; }
+        for (const e of entries) {
+          if (e.name.startsWith('.') || e.name === 'node_modules') continue;
+          const rel = prefix ? `${prefix}/${e.name}` : e.name;
+          if (e.isDirectory()) walk(join(dir, e.name), rel, into);
+          else into.add(rel);
+        }
+      };
+      const prior = new Set();
+      walk(cwd, '', prior);
+      const res = await invokeLane(builder, brief, { timeoutMs: 1000 * 60 * 30, cwd, allowWrites: lockSpecs(locked, cwd) });
+      const afterNames = new Set();
+      walk(cwd, '', afterNames);
+      const crept = scopeCreep([...afterNames].filter((f) => !prior.has(f)), locked);
+      if (crept.length) {
+        const settled = settleCreep({ creep: crept, why: '', cwd, prior });
+        console.log(`parity loop · scope rejected ${crept.join(', ')} (${settled.reverted.map((x) => x.result).join(', ')})`);
+        noMoveStreak += 1;
+      }
       lapsBurned = iter;
       const laneTok = res.usage?.total_tokens || 0;
       meteredTokens += laneTok;
@@ -243,10 +318,22 @@ export async function cmdParity(args, flags) {
         console.log('parity loop · CIRCUIT BREAKER: builder failing repeatedly - stopping honestly');
         return 4;
       }
+      }
+      saveCheckpoint(phase);
+      fileSummary();
+      return 5;
+    };
+    const coreResult = coreChecks.length ? await drive(coreChecks, 'core') : 'closed';
+    if (coreResult !== 'closed') return coreResult;
+    if (beyond && stretchChecks.length) {
+      console.log('parity loop · core closed · starting stretch');
+      const stretchResult = await drive(stretchChecks, 'stretch');
+      if (stretchResult !== 'closed') return stretchResult;
     }
-    console.log(`parity loop · ITERATION CAP (${maxIter}) - stopping with contract still open (raise --max-iter)`);
+    try { unlinkSync(checkpointPath); } catch { /* no checkpoint to clear */ }
+    console.log('parity loop · ALL BEHAVIORS CLOSED - contract matches the build');
     fileSummary();
-    return 5;
+    return 0;
   }
   // B6: cadre parity --ledger renders the parity ledger (no build)
   if (flags.ledger) {
@@ -283,7 +370,8 @@ export async function cmdParity(args, flags) {
     return 1;
   }
 
-  const record = createRun({ brief: `parity: ${target} (ref ${ref})`, kind: 'parity', roles: {} });
+  const refSha = refExists ? createHash('sha256').update(readFileSync(ref)).digest('hex') : null;
+  const record = createRun({ brief: `parity: ${target} (ref ${ref})`, kind: 'parity', roles: {}, meta: { ref, refSha } });
   console.log(`cadre parity - run ${record.id} · target: ${target}`);
   console.log(`ref: ${ref}${refExists ? ' (file on disk)' : ' (reference id)'}`);
 
@@ -396,9 +484,7 @@ export async function cmdParity(args, flags) {
     console.log(approved ? `\n✓ parity run ${record.id} - build approved; citation filed (${axRun ? axRun[0] : 'stdout'})` : `\n✗ parity run ${record.id} - build not approved`);
     appendLedger(approved ? 'approved' : 'rejected');
     if (N > 0) {
-      const done = approved ? N : Math.floor(N / 2); // honest: gate decided, count what passed
-      for (let i = 0; i < N; i++) appendLedger(`${approved ? 'behavior-pass' : 'behavior-open'} [${i + 1}/${N}] ${behaviors[i].slice(0, 80)}`);
-      console.log(`parity progress: ${done}/${N} behaviors ${approved ? 'pass' : 'open'} (ledger rows filed)`);
+      console.log(`parity · ax gate ${approved ? 'approved' : 'rejected'}. Per-behavior parity is cadre parity --until-proven --ref ${ref}`);
     }
     return approved ? 0 : 1;
   } catch (e) {

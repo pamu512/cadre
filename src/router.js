@@ -11,6 +11,7 @@ import { homedir } from 'node:os';
 import { loadPins, listRuns } from './store.js';
 import { classifyTask, costPolicyFor } from './taskclass.js';
 import { entitlementView, usageFromAudit } from './meters.js';
+import { choiceFor, judgeRole, healthyChoice, preferenceAlert, exploreRole } from './preferences.js';
 
 export const ROLES = ['planner', 'builder', 'critic', 'verifier'];
 
@@ -18,7 +19,7 @@ export const ROLES = ['planner', 'builder', 'critic', 'verifier'];
 // toward general fit but don't claim a specific role.
 const ROLE_TAGS = {
   planner:  ['planning', 'plans', 'research', 'long-ctx', 'reasoning', 'decisions'],
-  builder:  ['edits', 'tests', 'backend', 'ui', 'ide-grade', 'scaffold', 'draft', 'drafting'],
+  builder:  ['edits', 'tests', 'backend', 'ui', 'ide-grade', 'scaffold', 'draft', 'drafting', 'create', 'write', 'fixtures'],
   critic:   ['review', 'critique', 'prose', 'long-reasoning', 'classification', 'decisions'],
   verifier: ['verify', 'ui', 'backend', 'tests', 'summarize'],
 };
@@ -119,7 +120,14 @@ export function scoreLane(lane, role, taskClass = null, entitlements = null, cra
   else if (policy === 'free-first' && lane.cost === 'metered') { classAdj = -2; classNote = 'task deterministic · metered penalized'; }
   else if (policy === 'capability-first' && (lane.cost === 'metered' || lane.cost === 'plan')) { classAdj = 2; classNote = 'task judgment · frontier preferred'; }
   else if (policy === 'capability-first' && lane.cost === 'free') { classAdj = -1; classNote = 'task judgment · free lane discounted'; }
-  const fit = overlap * 2 + prefBonus - penalty - histPenalty + classAdj + entAdj + craftAdj;
+  let benchAdj = 0;
+  let benchNote = null;
+  const bench = benchFor(taskClass).get(lane.name);
+  if (bench?.passed > 0) {
+    benchAdj = bench.tokens / Math.max(1, bench.passed) <= 20000 ? 2 : 1;
+    benchNote = `bench ${bench.passed} passed`;
+  }
+  const fit = overlap * 2 + prefBonus - penalty - histPenalty + classAdj + entAdj + craftAdj + benchAdj;
   const h = laneHistory().get(lane.name);
   const why = [
     `good_at ∩ ${role}: ${overlap}`,
@@ -130,13 +138,47 @@ export function scoreLane(lane, role, taskClass = null, entitlements = null, cra
     classNote,
     entNote,
     craftNote,
+    benchNote,
   ].filter(Boolean).join(' · ');
   return { role, lane: lane.name, fit, costRank: COST_RANK[lane.cost] ?? 3, why };
 }
 
-// Assign every role from the roster. Pins override; remaining roles go by score.
-export function assignRoles(roster, { brief = '' } = {}) {
-  const pins = loadPins();
+let _bench = null;
+export function benchStats(taskClass) {
+  const key = typeof taskClass === 'string' ? taskClass : taskClass?.class;
+  return benchFor({ class: key || 'unclassified' });
+}
+function benchFor(taskClass) {
+  const key = taskClass?.class || 'unclassified';
+  if (_bench?.key === key) return _bench.map;
+  const map = new Map();
+  try {
+    for (const r of listRuns()) {
+      if (r.status !== 'passed' || !r.roles) continue;
+      if (classifyTask(r.brief || '').class !== key) continue;
+      for (const lane of Object.values(r.roles)) {
+        if (!lane) continue;
+        const cur = map.get(lane) || { passed: 0, tokens: 0 };
+        cur.passed += 1;
+        cur.tokens += r.usage?.metered_tokens || 0;
+        map.set(lane, cur);
+      }
+    }
+  } catch { /* no ledger yet */ }
+  _bench = { key, map };
+  return map;
+}
+
+// Assign every role from the roster. Pins and remembered preferences apply
+// when they are healthy. A degrading one is set aside unless this run
+// explicitly overrides it.
+export function assignRoles(roster, { brief = '', roleOverride = null, override = false } = {}) {
+  const loaded = loadPins();
+  const pins = { ...loaded, roles: { ...(loaded.roles || {}) } };
+  if (typeof roleOverride === 'string' && roleOverride.includes('=')) {
+    const [role, lane] = roleOverride.split('=');
+    if (role && lane) pins.roles[role] = lane;
+  }
   const assignments = [];
   const used = new Set();
   const task = classifyTask(brief);
@@ -159,21 +201,79 @@ export function assignRoles(roster, { brief = '' } = {}) {
     assignments.entitlements = entitlements; // explainRouting/plan can render it
   } catch { /* meters best-effort; undeclared lanes route by cost class */ }
 
+  assignments.alerts = [];
+  const explicitRole = {};
+  if (typeof roleOverride === 'string' && roleOverride.includes('=')) {
+    const [role, lane] = roleOverride.split('=');
+    if (role && lane) explicitRole[role] = lane;
+  }
+
   for (const role of ROLES) {
+    const remembered = choiceFor(role);
     const pinned = pins.roles?.[role];
-    if (pinned && roster.lanes.some((l) => l.name === pinned)) {
-      assignments.push({ role, lane: pinned, why: 'pinned by you', fit: null });
-      used.add(pinned);
+    // A habit is a bonus in the fit loop, not a lock. Pins and --role still lock.
+    const habit = remembered?.source === 'habit' ? remembered : null;
+    if (habit?.from && !explicitRole[role] && !pinned) {
+      assignments.alerts.push(`preference · ${role} evolved ${habit.from} → ${habit.lane} (${habit.passed}/${habit.seen} passed).`);
     }
+    const requested = explicitRole[role] || pinned || (remembered?.lane && remembered.source !== 'habit' ? remembered.lane : null);
+    const source = explicitRole[role] ? 'explicit' : pinned ? 'pin' : remembered?.lane ? 'learned' : null;
+    if (!requested || !roster.lanes.some((l) => l.name === requested)) continue;
+    const judgment = judgeRole(role, requested);
+    if (judgment.degrading && !explicitRole[role] && !override) {
+      const corr = judgment.correction?.lane;
+      assignments.alerts.push(preferenceAlert({ role, lane: requested, judgment, kept: false }));
+      if (corr && roster.lanes.some((l) => l.name === corr)) {
+        assignments.push({ role, lane: corr, why: `correction for degrading ${source} ${requested}`, fit: null });
+        used.add(corr);
+      }
+      continue;
+    }
+    if (judgment.degrading) {
+      assignments.alerts.push(preferenceAlert({ role, lane: requested, judgment, kept: true }));
+    }
+    const why = explicitRole[role]
+      ? 'explicit override'
+      : source === 'pin'
+        ? 'pinned by you'
+        : remembered?.source === 'habit'
+          ? 'your habit'
+          : 'your preference';
+    if (remembered?.from && requested === remembered.lane && !explicitRole[role]) {
+      assignments.alerts.push(`preference · ${role} evolved ${remembered.from} → ${remembered.lane} (${remembered.passed}/${remembered.seen} passed).`);
+    }
+    assignments.push({ role, lane: requested, why, fit: null });
+    used.add(requested);
   }
 
   for (const role of ROLES) {
     if (assignments.some((a) => a.role === role)) continue;
-    const scored = roster.lanes
+    const remembered = choiceFor(role);
+    const habitLane = remembered?.source === 'habit' ? remembered.lane : null;
+    const exploring = exploreRole(role);
+    const prefer = exploring ? null : healthyChoice(role);
+    let scored = roster.lanes
       .filter((l) => !used.has(l.name))
-      .map((l) => scoreLane(l, role, task, entitlements, craftHits))
+      .map((l) => {
+        const s = scoreLane(l, role, task, entitlements, craftHits);
+        if (prefer && s.lane === prefer && s.fit > 0) return { ...s, fit: s.fit + 3, why: `${s.why} · your habit` };
+        return s;
+      })
       .filter((s) => s.fit > 0)
       .sort((a, b) => b.fit - a.fit || a.costRank - b.costRank); // fit first, cost only breaks ties
+    const covered = scored.filter((s) => {
+      const lane = roster.lanes.find((l) => l.name === s.lane);
+      if (!lane || lane.cost === 'metered') return false;
+      return entitlements?.byLane?.get(s.lane)?.state !== 'empty';
+    });
+    const bestCovered = covered[0]?.fit || 0;
+    if (covered.length) {
+      scored = scored.filter((s) => {
+        const lane = roster.lanes.find((l) => l.name === s.lane);
+        if (!lane || lane.cost !== 'metered') return true;
+        return s.fit > bestCovered;
+      });
+    }
     if (scored.length === 0) {
       // last resort: everyone capable is failing on history. Take the best
       // history-penalized lane anyway (capability > nothing) and WARN.
@@ -188,8 +288,13 @@ export function assignRoles(roster, { brief = '' } = {}) {
       used.add(capable[0].name);
       continue;
     }
-    assignments.push(scored[0]);
-    used.add(scored[0].lane);
+    let pick = scored[0];
+    if (exploring && habitLane && pick?.lane === habitLane && scored[1]) {
+      assignments.alerts.push(`preference · ${role} exploring past ${habitLane}; ${scored[1].lane} gets this run`);
+      pick = scored[1];
+    }
+    assignments.push(pick);
+    used.add(pick.lane);
   }
 
   // keep role order stable in output
@@ -198,9 +303,20 @@ export function assignRoles(roster, { brief = '' } = {}) {
   return { brief, assignments };
 }
 
+export function bestDrivable(roster, role, brief, drivable) {
+  const task = classifyTask(brief);
+  const scored = (roster.lanes || [])
+    .filter((l) => drivable(l))
+    .map((l) => scoreLane(l, role, task))
+    .filter((s) => s.fit > 0)
+    .sort((a, b) => b.fit - a.fit || a.costRank - b.costRank);
+  if (scored.length) return roster.lanes.find((l) => l.name === scored[0].lane) || null;
+  return (roster.lanes || []).find((l) => drivable(l)) || null;
+}
+
 export function explainRouting(assignments) {
   return assignments.assignments.map((a) => {
-    const tail = a.fit === null || a.fit === 0 ? '' : ` (fit ${a.fit}: ${a.why})`;
+    const tail = a.fit === null ? ` (${a.why})` : a.fit === 0 ? '' : ` (fit ${a.fit}: ${a.why})`;
     return `${a.role.padEnd(9)} ${a.lane || '-'}${tail}`;
   }).join('\n');
 }

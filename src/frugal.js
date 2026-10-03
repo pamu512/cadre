@@ -39,3 +39,18 @@ export function compressOutput(text, { backupDir = null, label = 'output' } = {}
 
   return { text: out, saved, originalBytes: original.length, compressedBytes: out.length, restorable: saved > 0 && Boolean(backupDir) };
 }
+
+// Tool output heading into a lane: keep diff hunks, drop file dumps, then compress.
+// A short brief is unchanged. Savings are the return value, never a hardcoded ratio.
+export function forContext(text, opts = {}) {
+  let src = String(text || '');
+  if (src.includes('diff --git')) {
+    const kept = [];
+    for (const line of src.split('\n')) {
+      if (/^(diff --git |index |--- |\+\+\+ |@@ |[+-])/.test(line)) kept.push(line);
+      else if (line.length > 0 && line.length < 160 && !line.startsWith('diff ')) kept.push(line);
+    }
+    src = kept.join('\n');
+  }
+  return compressOutput(src, opts);
+}

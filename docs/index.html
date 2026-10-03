@@ -1,0 +1,1667 @@
+<!doctype html>
+<!--
+  Discovery:
+    deliverable: single-page product concept for "Cadre" — a model/bot-agnostic agent harness
+    audience: AI power users running several models/bots; lead story = model-agnostic, one command
+    direction: calm paper editorial + dark precise terminal as protagonist (dense/professional)
+    sections: 13 (hero / one-command / parity + router / meters / stop-discipline / lanes / playground / surfaces / proof / sweep / commands / cta / footer)
+    surface focus: CLI flows — interactive terminal simulation (go, parity, plan, meter, sweep, pin, map, mcp, lanes, debate, watch, proof, help) + editor-GUI chat mock
+    note: terminals are a simulation of the installed CLI. Sample lanes only. No dollar figures, no 41/41.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="light" />
+<meta name="description" content="Cadre — a local model/bot-agnostic agent harness: any model, any bot, one command, with an evidence gate that decides done." />
+<meta property="og:title" content="Cadre — any model. any bot. one command." />
+<meta property="og:description" content="A local-first, model-agnostic agent harness with lanes, meters, sweep, and an evidence gate. The terminals on this page are a simulation of the CLI." />
+<meta property="og:type" content="website" />
+<title>Cadre — any model. any bot. one command.</title>
+<script id="auto-designer-preview-contract" type="application/json">
+{
+  "artifactRole": "web-page",
+  "authoringViewport": { "width": 1440, "height": 900 },
+  "deviceAdaptation": {
+    "enabled": true,
+    "strategy": "responsive",
+    "supportedDevices": ["desktop", "tablet", "mobile"]
+  },
+  "breakpoints": { "mobileMax": 767, "tabletMin": 768, "tabletMax": 1023, "desktopMin": 1024 },
+  "defaultDevice": "canvas"
+}
+</script>
+<style>
+  :root {
+    --bg: #faf9f4;
+    --surface: #ffffff;
+    --fg: #201d17;
+    --muted: #6d675b;
+    --border: #e6e1d4;
+    --accent: #b9532e;        /* fill use only */
+    --accent-ink: #9c4523;    /* text-safe accent on paper */
+    --accent-soft: rgba(185, 83, 46, 0.09);
+
+    --tbg: #181510;
+    --tborder: #2b261d;
+    --tfg: #ece6d6;
+    --tdim: #9a9280;
+    --lane-plan: #d6a34d;
+    --lane-build: #62b9cb;
+    --lane-critic: #d67f95;
+    --lane-verify: #97c377;
+    --t-err: #e2694f;
+
+    --font-display: 'Iowan Old Style', 'Charter', Georgia, 'Times New Roman', serif;
+    --font-body: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+
+    --fs-h1: clamp(42px, 5.4vw, 72px);
+    --fs-h2: clamp(30px, 3.6vw, 44px);
+    --fs-h3: 20px;
+    --fs-lead: 18px;
+    --fs-body: 16px;
+    --fs-meta: 13px;
+
+    --gap-md: 20px;
+    --gap-lg: 32px;
+    --gap-xl: 56px;
+    --container: 1120px;
+    --gutter: 28px;
+    --radius: 6px;
+    --radius-lg: 10px;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font-family: var(--font-body); font-size: var(--fs-body); line-height: 1.55;
+    text-rendering: optimizeLegibility; -webkit-font-smoothing: antialiased;
+  }
+  img, svg { display: block; max-width: 100%; }
+  a { color: inherit; text-decoration: none; }
+  button { font: inherit; cursor: pointer; }
+  p { text-wrap: pretty; }
+  h1, h2, h3, h4 { text-wrap: balance; margin: 0; }
+
+  .container { max-width: var(--container); margin-inline: auto; padding-inline: var(--gutter); }
+  .section { padding-block: clamp(56px, 9vw, 110px); }
+  .section + .section { border-top: 1px solid var(--border); }
+  .stack { display: flex; flex-direction: column; }
+  .row-between { display: flex; align-items: center; justify-content: space-between; gap: var(--gap-md); flex-wrap: wrap; }
+  .grid-2-1 { display: grid; grid-template-columns: 1.9fr 1fr; gap: clamp(32px, 5vw, 72px); align-items: start; }
+  @media (max-width: 920px) { .grid-2-1 { grid-template-columns: 1fr; } }
+
+  .h1, h1 { font-family: var(--font-display); font-size: var(--fs-h1); line-height: 1.03; letter-spacing: -0.022em; }
+  .h2, h2 { font-family: var(--font-display); font-size: var(--fs-h2); line-height: 1.08; letter-spacing: -0.016em; }
+  .h3 { font-size: var(--fs-h3); font-weight: 600; line-height: 1.3; letter-spacing: -0.005em; }
+  .lead { font-size: var(--fs-lead); line-height: 1.6; color: var(--muted); max-width: 58ch; margin: 0; }
+  .eyebrow {
+    font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.09em;
+    text-transform: uppercase; color: var(--accent-ink); margin: 0 0 18px;
+  }
+  .meta { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--muted); }
+
+  /* ── nav ─────────────────────────────────────────── */
+  .topnav {
+    position: sticky; top: 0; z-index: 20;
+    background: rgba(250, 249, 244, 0.9); backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--border);
+  }
+  .topnav-inner { display: flex; align-items: center; justify-content: space-between; padding-block: 13px; gap: var(--gap-md); }
+  .logo { font-family: var(--font-display); font-size: 20px; font-weight: 600; letter-spacing: -0.01em; white-space: nowrap; }
+  .logo .logo-mark { color: var(--accent-ink); }
+  .topnav nav { display: flex; gap: 26px; }
+  .topnav nav a { font-size: 14px; color: var(--muted); }
+  .topnav nav a:hover { color: var(--fg); }
+  .nav-toggle { display: none; }
+  @media (max-width: 760px) {
+    .topnav nav { display: none; }
+    .nav-toggle { display: block; position: relative; }
+    .nav-toggle summary { list-style: none; cursor: pointer; font-family: var(--font-mono); font-size: 13px; color: var(--muted); padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius); }
+    .nav-toggle summary::-webkit-details-marker { display: none; }
+    .nav-toggle summary::after { content: ' ↓'; }
+    .nav-toggle[open] summary::after { content: ' ↑'; }
+    .nav-toggle .nav-sheet { position: absolute; top: 100%; right: 0; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 0; display: flex; flex-direction: column; min-width: 220px;  }
+    .nav-toggle .nav-sheet a { padding: 11px 18px; font-size: 15px; color: var(--fg); }
+    .nav-toggle .nav-sheet a:hover { background: var(--accent-soft); }
+  }
+
+  /* ── buttons ─────────────────────────────────────── */
+  .btn {
+    display: inline-flex; align-items: center; gap: 9px;
+    padding: 11px 20px; border-radius: var(--radius);
+    border: 1px solid transparent; font-size: 15px; font-weight: 500; letter-spacing: 0.01em;
+    transition: transform 0.05s ease, background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  }
+  .btn:active { transform: translateY(1px); }
+  .btn-primary { background: var(--accent); color: #fff8f2; border-color: var(--accent); }
+  .btn-primary:hover { background: #a4492a; }
+  .btn-secondary { background: transparent; color: var(--fg); border-color: var(--border); }
+  .btn-secondary:hover { border-color: var(--fg); }
+  .btn:focus-visible, a:focus-visible, .chip:focus-visible, .term-input:focus-visible {
+    outline: 2px solid var(--accent-ink); outline-offset: 2px;
+  }
+
+  /* ── hero ────────────────────────────────────────── */
+  .hero { padding-block: clamp(48px, 7vw, 96px) clamp(40px, 6vw, 80px); }
+  .hero-split { display: grid; grid-template-columns: 1fr 1.08fr; gap: clamp(32px, 4.5vw, 60px); align-items: center; }
+  @media (max-width: 980px) { .hero-split { grid-template-columns: 1fr; } }
+  .hero .lead { margin-bottom: 30px; }
+  .hero-cta { display: inline-flex; gap: 12px; flex-wrap: wrap; }
+  .btn-primary .btn-mono { font-family: var(--font-mono); font-size: 14px; }
+  .hero-note { margin-top: 18px; font-size: 13px; color: var(--muted); }
+  .hero-note .kbd {
+    font-family: var(--font-mono); font-size: 12px; border: 1px solid var(--border);
+    border-radius: 5px; padding: 1px 6px; background: var(--surface);
+  }
+
+  /* ── terminal (the protagonist) ──────────────────── */
+  .term {
+    background: var(--tbg); color: var(--tfg);
+    border: 1px solid var(--tborder); border-radius: var(--radius-lg);
+    
+    overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+  .term-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 11px 16px; border-bottom: 1px solid var(--tborder);
+    background: rgba(255, 252, 244, 0.028);
+  }
+  .term-dot { width: 11px; height: 11px; border-radius: 50%; background: #35301f; border: 1px solid #453d28; }
+  .term-title { font-family: var(--font-mono); font-size: 12px; color: var(--tdim); margin-left: 4px; letter-spacing: 0.02em; }
+  .term-badge {
+    margin-left: auto; font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.1em;
+    color: var(--tdim); border: 1px solid #3a3425; border-radius: 999px; padding: 2px 9px; text-transform: uppercase;
+  }
+  .term-replay {
+    background: none; border: 1px solid #3a3425; color: var(--tdim); border-radius: 6px;
+    padding: 3px 9px; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.03em;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .term-replay:hover:not(:disabled) { color: var(--tfg); border-color: #574d33; }
+  .term-replay:disabled { opacity: 0.45; cursor: default; }
+  .term-replay svg { width: 11px; height: 11px; }
+  .term-body {
+    font-family: var(--font-mono); font-size: 13px; line-height: 1.62;
+    padding: 18px 20px 20px; overflow-y: auto; min-height: 120px;
+    scrollbar-width: thin; scrollbar-color: #3a3425 transparent;
+  }
+  .tl { white-space: pre-wrap; word-break: break-word; min-height: 1.62em; }
+  .tl.c-d   { color: var(--tdim); }
+  .tl.c-a   { color: var(--lane-plan); }
+  .tl.c-b   { color: var(--lane-build); }
+  .tl.c-r   { color: var(--lane-critic); }
+  .tl.c-g   { color: var(--lane-verify); }
+  .tl.c-e   { color: var(--t-err); }
+  .tl.c-y   { color: var(--lane-plan); }
+  .tl.c-ok  { color: var(--lane-verify); }
+  .tl .c-ok { color: var(--lane-verify); }
+  @media (prefers-reduced-motion: reduce) {
+    .term-caret { animation: none; }
+    html { scroll-behavior: auto; }
+  }
+  .tl.c-bt  { color: var(--tfg); }
+  .tl .sp { color: var(--tdim); }
+  .term-caret { display: inline-block; width: 8px; height: 15px; background: var(--tfg); vertical-align: -2px; animation: blink 1.05s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  .term-input-line { display: flex; align-items: baseline; gap: 8px; }
+  .term-input {
+    flex: 1; background: transparent; border: 0; outline: none;
+    color: var(--tfg); font-family: var(--font-mono); font-size: 13px; caret-color: var(--tfg);
+    min-width: 40px;
+  }
+  @media (pointer: coarse) { .term-input { font-size: 16px; } }
+  .term-input::placeholder { color: #5c563f; }
+  .term-input:disabled { opacity: 0.55; }
+
+  /* ── timeline (what go does) ─────────────────────── */
+  .steps { display: flex; flex-direction: column; counter-reset: step; }
+  .step { display: grid; grid-template-columns: 58px 1fr; gap: 18px; padding-block: 22px; border-top: 1px solid var(--border); }
+  .step:last-child { border-bottom: 1px solid var(--border); }
+  .step-num {
+    font-family: var(--font-mono); font-size: 13px; color: var(--accent-ink);
+    padding-top: 4px; letter-spacing: 0.04em;
+  }
+  .step h3 { margin-bottom: 6px; }
+  .step p { margin: 0; color: var(--muted); font-size: 15px; max-width: 56ch; }
+
+  /* ── lane contract card ──────────────────────────── */
+  .lane-card {
+    background: var(--tbg); border: 1px solid var(--tborder); border-radius: var(--radius-lg);
+    padding: 20px 22px; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.75; color: var(--tfg);
+  }
+  .lane-card .k { color: var(--tdim); }
+  .lane-card .v-a { color: var(--lane-build); }
+  .lane-card .v-g { color: var(--lane-verify); }
+  .lane-card .v-y { color: var(--lane-plan); }
+  .lane-card .v-r { color: var(--lane-critic); }
+  .lane-cap { font-size: 12px; color: var(--muted); margin-top: 10px; font-family: var(--font-body); }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .tag {
+    display: inline-flex; align-items: center; padding: 4px 11px;
+    background: var(--surface); color: var(--muted); border: 1px solid var(--border);
+    border-radius: 999px; font-size: 12.5px; font-family: var(--font-mono); letter-spacing: 0.01em;
+  }
+
+  /* ── adapter diagram (live HTML) ─────────────────── */
+  .adapter { margin-top: 40px; }
+  .adapter-row { display: grid; grid-template-columns: 1fr 44px 1fr 44px 1.15fr; gap: 0; align-items: center; }
+  @media (max-width: 920px) {
+    .adapter-row { grid-template-columns: 1fr; gap: 14px; }
+    .adapter-arrow { transform: rotate(90deg); justify-content: center; }
+  }
+  .adapter-col { display: flex; flex-direction: column; gap: 14px; }
+  .src-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; }
+  .src-card h4 { font-size: 14px; margin-bottom: 3px; }
+  .src-card p { margin: 0; font-family: var(--font-mono); font-size: 11.5px; color: var(--muted); line-height: 1.6; }
+  .adapter-arrow { display: flex; align-items: center; justify-content: center; color: #b3ac9c; }
+  .adapter-arrow svg { width: 26px; height: 26px; }
+  .harness-card {
+    background: var(--surface); border: 1px solid var(--fg); border-radius: var(--radius-lg); padding: 22px 24px;
+  }
+  .harness-card > h4 { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); margin-bottom: 16px; }
+  .loop { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .loop-pill {
+    font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.02em;
+    border: 1px solid var(--border); border-radius: 999px; padding: 5px 13px; background: var(--bg);
+  }
+  .loop-pill.lp-a { color: #8a6420; border-color: #e5d3ac; }
+  .loop-pill.lp-b { color: #2e7280; border-color: #bedde3; }
+  .loop-pill.lp-r { color: #93536a; border-color: #ecd0d9; }
+  .loop-pill.lp-g { color: #4e7133; border-color: #cfe2bb; }
+  .loop-sep { color: #b3ac9c; font-family: var(--font-mono); font-size: 12px; }
+  .gate-line { display: flex; align-items: center; gap: 10px; margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--border); }
+  .gate-chip {
+    font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--accent-ink); border: 1.5px solid var(--accent-ink); border-radius: 6px; padding: 3px 10px; transform: rotate(-1.2deg);
+  }
+  .gate-line p { margin: 0; font-size: 13px; color: var(--muted); }
+
+  /* ── playground ──────────────────────────────────── */
+  .chip-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px; }
+  .chip {
+    font-family: var(--font-mono); font-size: 12.5px; letter-spacing: 0.01em;
+    background: var(--surface); color: var(--fg); border: 1px solid var(--border);
+    border-radius: 999px; padding: 6px 14px;
+    transition: border-color 0.12s ease, color 0.12s ease;
+  }
+  .chip:hover:not(:disabled) { border-color: var(--fg); }
+  .chip:disabled { opacity: 0.45; cursor: default; }
+  .chip-hint { font-size: 12px; color: var(--muted); margin-left: 6px; }
+  #pg-term .term-body { min-height: 380px; max-height: 480px; }
+
+  /* ── evidence gate ───────────────────────────────── */
+  .gate-grid { display: grid; grid-template-columns: 1fr 1fr; gap: clamp(32px, 5vw, 72px); align-items: center; }
+  @media (max-width: 920px) { .gate-grid { grid-template-columns: 1fr; } }
+  .stamp {
+    width: 208px; height: 208px; border-radius: 50%; margin: 0 auto;
+    border: 3px double var(--accent-ink); color: var(--accent-ink);
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+    transform: rotate(-7deg); opacity: 0.92;
+    font-family: var(--font-mono); letter-spacing: 0.14em; text-transform: uppercase;
+    box-shadow: inset 0 0 0 5px rgba(156, 69, 35, 0.06);
+  }
+  .stamp .stamp-word { font-size: 26px; font-weight: 700; }
+  .stamp .stamp-sub { font-size: 11px; }
+  .stamp .stamp-rule { width: 116px; border-top: 1.5px solid currentColor; }
+  .compare { margin-top: 34px; border-top: 1px solid var(--border); }
+  .compare-row { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 1px solid var(--border); }
+  .compare-row > div { padding: 13px 18px 13px 0; font-size: 14.5px; }
+  .compare-row > div:first-child { color: var(--muted); border-right: 1px solid var(--border); padding-right: 22px; }
+  .compare-row > div:last-child { padding-left: 22px; }
+  .compare-head { font-family: var(--font-mono); font-size: 11.5px; letter-spacing: 0.09em; text-transform: uppercase; }
+  .compare-head.no { color: var(--muted); }
+  .compare-head.yes { color: var(--accent-ink); }
+
+  /* ── commands table ──────────────────────────────── */
+  .cmd-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  .cmd-table th, .cmd-table td { text-align: left; padding: 13px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  .cmd-table th { color: var(--muted); font-weight: 500; font-family: var(--font-mono); font-size: 11.5px; letter-spacing: 0.07em; text-transform: uppercase; }
+  .cmd-table td:first-child { font-family: var(--font-mono); font-size: 13px; white-space: nowrap; }
+  .cmd-table td { color: var(--muted); }
+  .cmd-table td strong { color: var(--fg); font-weight: 600; }
+  .cmd-table .fl { font-family: var(--font-mono); font-size: 12px; color: var(--accent-ink); }
+  @media (max-width: 720px) {
+    .cmd-table th:nth-child(3), .cmd-table td:nth-child(3) { display: none; }
+    .cmd-table td:first-child { white-space: normal; }
+  }
+
+  /* ── figure / cta / footer ───────────────────────── */
+  figure { margin: 46px 0 0; }
+  figure img { width: 100%; height: auto; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); }
+  /* ── chat surface (editor GUI mock) ─────────────── */
+  .chat-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden;  }
+  .chat-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; border-bottom: 1px solid var(--border); }
+  .chat-badge { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.1em; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 2px 9px; text-transform: uppercase; }
+  .chat-body { padding: 18px 20px 20px; display: flex; flex-direction: column; gap: 16px; }
+  .msg .who { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); display: block; margin-bottom: 6px; }
+  .msg p { margin: 0; font-size: 14.5px; }
+  .msg.you p { color: var(--muted); }
+  .toolcard { border: 1px solid var(--border); border-radius: var(--radius); margin: 10px 0; overflow: hidden; }
+  .toolcard-head { display: flex; justify-content: space-between; padding: 8px 12px; background: var(--bg); font-family: var(--font-mono); font-size: 12px; }
+  .toolcard-head .tname { color: var(--accent-ink); }
+  .toolcard-head .tstate { color: var(--muted); }
+  .toolcard-head .tstate.ok { color: #4e7133; }
+  .toolcard-rows { padding: 8px 12px; }
+  .tr-row { font-family: var(--font-mono); font-size: 12px; color: var(--muted); padding: 3px 0; opacity: 0; transform: translateY(4px); transition: opacity 0.4s ease, transform 0.4s ease; }
+  .tr-row.ok { color: #4e7133; }
+  .tr-row:nth-child(1) { transition-delay: 0.15s; }
+  .tr-row:nth-child(2) { transition-delay: 0.5s; }
+  .tr-row:nth-child(3) { transition-delay: 0.9s; }
+  @media (prefers-reduced-motion: reduce) { .tr-row { transition: none; opacity: 1; transform: none; } }
+  .chat-card.reveal .tr-row { opacity: 1; transform: none; }
+  .tlink { font-family: var(--font-mono); font-size: 13px; color: var(--accent-ink); border-bottom: 1px dotted var(--accent-ink); }
+
+  figcaption { margin-top: 12px; font-size: 13px; color: var(--muted); text-align: center; }
+
+  .cta-strip { text-align: center; }
+  .cta-strip .lead { margin: 16px auto 30px; }
+
+  .pagefoot { border-top: 1px solid var(--border); padding-block: 30px; color: var(--muted); font-size: 13px; }
+  .pagefoot .meta { font-size: 12px; }
+</style>
+</head>
+<body>
+  <a class="skip-link" href="#content" style="position:absolute;left:-9999px;top:0;background:var(--surface);color:var(--fg);padding:10px 16px;z-index:99;border:1px solid var(--border);border-radius:0 0 var(--radius) 0;font-size:14px">Skip to content</a>
+
+<header class="topnav" data-od-id="topnav">
+  <div class="container topnav-inner">
+    <span class="logo">cadre<span class="logo-mark">.</span></span>
+    <nav aria-label="Sections">
+      <a href="#flows">The one command</a>
+      <a href="#parity">Parity</a>
+      <a href="#meters">Meters</a>
+      <a href="#discipline">Discipline</a>
+      <a href="#lanes">Lanes</a>
+      <a href="#playground">Playground</a>
+      <a href="#surfaces">In your editor</a>
+      <a href="#proof">Proof</a>
+      <a href="#commands">Commands</a>
+    </nav>
+    <details class="nav-toggle">
+      <summary>Sections</summary>
+      <nav class="nav-sheet" aria-label="Sections">
+        <a href="#flows">The one command</a>
+        <a href="#parity">Parity</a>
+        <a href="#meters">Meters</a>
+        <a href="#discipline">Discipline</a>
+        <a href="#lanes">Lanes</a>
+        <a href="#playground">Playground</a>
+        <a href="#surfaces">In your editor</a>
+        <a href="#proof">Proof &amp; sweep</a>
+        <a href="#commands">Commands</a>
+      </nav>
+    </details>
+    <a class="btn btn-primary" href="#playground"><span class="btn-mono">try the playground</span></a>
+  </div>
+</header>
+
+<main id="content">
+
+  <!-- 1 · hero -->
+  <section class="section hero" data-od-id="hero">
+    <div class="container hero-split">
+      <div>
+        <p class="eyebrow">The model-agnostic harness</p>
+        <h1>Any model.<br>Any bot.<br>One command.</h1>
+        <p class="lead" style="margin-top: 24px;">Cadre links the AIs you already use — terminal agents, desktop apps, API models, even teammates — into one crew. Give it an outcome. It picks the team, runs the loop, and refuses to say <em>done</em> until the work checks out. Hand it a spec and it builds until each named check passes.</p>
+        <div class="hero-cta">
+          <a class="btn btn-primary" href="#playground"><span class="btn-mono">cadre go</span></a>
+          <a class="btn btn-secondary" href="#flows">What happens after enter</a>
+        </div>
+        <p class="hero-note">The scan is the roster. No enrollment. <span class="kbd">esc</span> stops this playground — in the product, Ctrl-C files the run as interrupted. Everything stays on your machine.</p>
+      </div>
+      <div class="term" id="hero-term" data-od-id="hero-terminal">
+        <div class="term-head">
+          <span class="term-dot" aria-hidden="true"></span><span class="term-dot" aria-hidden="true"></span><span class="term-dot" aria-hidden="true"></span>
+          <span class="term-title">cadre — zsh</span>
+          <span class="term-badge">simulated</span>
+          <button class="term-replay" id="hero-replay" disabled>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5"/></svg>
+            replay
+          </button>
+        </div>
+        <div class="term-body" role="log" aria-label="Simulated terminal demo of cadre go"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2 · what the one command does -->
+  <section class="section" id="flows" data-od-id="flows">
+    <div class="container">
+      <div class="grid-2-1">
+        <div>
+          <p class="eyebrow">What the one command does</p>
+          <h2 style="margin-bottom: 34px;">Press enter. Thirty seconds later, a crew is working.</h2>
+          <div class="steps">
+            <div class="step">
+              <span class="step-num">01</span>
+              <div><h3>Read the room</h3><p>Cadre scans what is actually on your machine — CLIs, apps, local models, keys, MCP servers, who's online. Your setup is the roster. Nothing to enroll, nothing to describe.</p></div>
+            </div>
+            <div class="step">
+              <span class="step-num">02</span>
+              <div><h3>Form the cadre</h3><p>Roles go to whoever fits, not whoever's loyal: a planner to shape the brief, builders to do the work, a critic to argue back, a verifier to run the checks.</p></div>
+            </div>
+            <div class="step">
+              <span class="step-num">03</span>
+              <div><h3>Gate on proof, file the receipts</h3><p>A run doesn't end when a model says it's finished. It ends when the gate holds checkable evidence: commands with output, files with diffs, artifacts, citations. Every run lands in a local audit trail — what was asked, who did what, what it cost, what proved it — replayable any time.</p></div>
+            </div>
+            </div>
+        </div>
+        <div>
+          <div class="term" id="scan-term" data-od-id="scan-terminal">
+            <div class="term-head">
+              <span class="term-dot" aria-hidden="true"></span><span class="term-dot" aria-hidden="true"></span><span class="term-dot" aria-hidden="true"></span>
+              <span class="term-title">step 01 · scan</span>
+              <span class="term-badge">simulated</span>
+            </div>
+            <div class="term-body" role="log" aria-label="Simulated lane scan output"></div>
+          </div>
+          <p class="lane-cap" style="margin-top: 12px; font-size: 13px; color: var(--muted);">The scan that starts every run — roles are suggested by fit, and you can always override with one flag.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2.5 · parity -->
+  <section class="section" id="parity" data-od-id="parity">
+    <div class="container">
+      <div class="grid-2-1">
+        <div>
+          <p class="eyebrow">The autonomous engineering loop</p>
+          <h2 style="margin-bottom: 24px;">Build to parity — then dare to pass it.</h2>
+          <p class="lead">Hand Cadre a spec file, or a repo whose <span style="font-family: var(--font-mono);">npm test</span> can fail. <span style="font-family: var(--font-mono);">cadre parity --until-proven --ref SPEC.md</span> loops until each named check passes. A sentence that does not name a check is printed and left unbuilt.</p>
+          <div class="steps" style="margin-top: 34px;">
+            <div class="step">
+              <span class="step-num">01</span>
+              <div><h3>Lock the contract</h3><p>A line closes only when it names a check: a command, a file that contains text, a path that exists, or a test name. Prose and an issue number stay open. Parity is those checks, not the vibes.</p></div>
+            </div>
+            <div class="step">
+              <span class="step-num">02</span>
+              <div><h3>Route by economics</h3><p>The bench uses passing runs of the same task class. Deterministic work prefers a cheap or local lane; judgment prefers a frontier lane. A covered lane beats a metered lane of equal fit. <span style="font-family: var(--font-mono);">--role</span> overrides one run.</p></div>
+            </div>
+            <div class="step">
+              <span class="step-num">03</span>
+              <div><h3>Loop unattended</h3><p>Port, verify, repair — as many laps as the budget allows. Every passing behavior lands with its citation attached. Every failing one goes back with a reason.</p></div>
+            </div>
+            <div class="step">
+              <span class="step-num">04</span>
+              <div><h3>Report in evidence</h3><p>The ledger records laps, which checks closed, and spend per lane. Stretch items are proposed. They are built only when the goal says to go beyond parity, and only after the core checks are green.</p></div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div class="term" id="parity-term" data-od-id="parity-terminal">
+            <div class="term-head">
+              <span class="term-dot" aria-hidden="true"></span><span class="term-dot" aria-hidden="true"></span><span class="term-dot" aria-hidden="true"></span>
+              <span class="term-title">cadre parity</span>
+              <span class="term-badge">simulated</span>
+            </div>
+            <div class="term-body" role="log" aria-label="Simulated parity loop run"></div>
+          </div>
+          <div class="lane-card" style="margin-top: 16px;" aria-label="How the cost router decides">
+            <div style="color: var(--tdim); font-family: var(--font-body); font-size: 12px; letter-spacing: 0.09em; text-transform: uppercase; margin-bottom: 10px;">the cost router · before every loop</div>
+            <div><span class="k">port &amp; scaffold</span>&nbsp;&nbsp;<span class="v-g">local · cheap</span>&nbsp;&nbsp;&nbsp;&nbsp;<span class="k">deterministic wins</span></div>
+            <div><span class="k">edge cases</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="v-r">frontier · metered</span>&nbsp;<span class="k">judgment wins</span></div>
+            <div><span class="k">review &amp; cite</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="v-y">mid-tier</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="k">reading is cheap</span></div>
+            <div><span class="k">final verify</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="v-g">local tooling</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="k">free and exact</span></div>
+            <div style="margin-top: 10px; border-top: 1px dashed var(--tborder); padding-top: 10px;"><span class="v-a">guardrail</span>&nbsp;&nbsp;<span class="k">cheaper lane passes the same probes → it takes over</span></div>
+          </div>
+          <p class="lane-cap">Routing is re-benched per task class and capped by the token budget. <span style="font-family: var(--font-mono);">--role</span> is the one-run override.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2.7 · meters -->
+  <section class="section" id="meters" data-od-id="meters">
+    <div class="container">
+      <div class="grid-2-1">
+        <div>
+          <p class="eyebrow">Plans, quotas, limits</p>
+          <h2 style="margin-bottom: 24px;">It knows what you've already paid for.</h2>
+          <p class="lead">Subscriptions, free tiers, rate limits, rollover credits — you declare them, and Cadre also reads a loopback status URL and the CLI's own on-disk usage. A remote billing API is not called. Routing burns a covered lane before a metered one, paces to the reset window, and refuses to spend during quiet hours.</p>
+          <div class="steps" style="margin-top: 34px;">
+            <div class="step">
+              <span class="step-num">01</span>
+              <div><h3>Read the entitlements</h3><p>Each lane declares what it's on: unlimited-but-queued, 5-hour windows, monthly quotas, rollover credits, hard rate ceilings. The router sees all of it, per provider, per plan.</p></div>
+            </div>
+            <div class="step">
+              <span class="step-num">02</span>
+              <div><h3>Favor the included</h3><p>Same quality tier? The lane whose window you've already paid for wins. Metered lanes only enter when they clear the gate — or when the covered option is exhausted or rate-limited.</p></div>
+            </div>
+            <div class="step">
+              <span class="step-num">03</span>
+              <div><h3>Pace to the window</h3><p>Long unattended runs get throttled to finish inside the quota window instead of blowing through it at hour one. If the math doesn't close, the run says so — before it starts.</p></div>
+            </div>
+            <div class="step">
+              <span class="step-num">04</span>
+              <div><h3>Degrade on empty</h3><p>Quota gone? The run downshifts to the next covered lane, parks metered work behind a budget gate, or pauses with a resume plan — it never silently burns cash or dies mid-loop.</p></div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div class="term" id="meter-term" data-od-id="meter-terminal">
+            <div class="term-head">
+              <span class="term-dot" aria-hidden="true"></span><span class="term-dot" aria-hidden="true"></span><span class="term-dot" aria-hidden="true"></span>
+              <span class="term-title">cadre meter</span>
+              <span class="term-badge">simulated</span>
+            </div>
+            <div class="term-body" role="log" aria-label="Simulated meters overview"></div>
+          </div>
+          <div class="lane-card" style="margin-top: 16px;" aria-label="How quota-aware routing decides">
+            <div style="color: var(--tdim); font-family: var(--font-body); font-size: 12px; letter-spacing: 0.09em; text-transform: uppercase; margin-bottom: 10px;">the router · now meter-aware</div>
+            <div><span class="k">same tier, two lanes</span>&nbsp;&nbsp;<span class="v-g">included window wins</span></div>
+            <div><span class="k">window empty</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="v-y">rollover credits next</span></div>
+            <div><span class="k">429 risk</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="v-r">pace to reset · not into it</span></div>
+            <div><span class="k">over budget</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="v-r">metered lane stays parked</span></div>
+            <div style="margin-top: 10px; border-top: 1px dashed var(--tborder); padding-top: 10px;"><span class="v-a">rule</span>&nbsp;&nbsp;<span class="k">never surprise-bill · never die silent</span></div>
+          </div>
+          <p class="lane-cap">A meter read hits loopback or a file already on disk. No credential leaves the machine. Every read lands in the local ledger.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2.9 · stop discipline -->
+  <section class="section" id="discipline" data-od-id="discipline">
+    <div class="container">
+      <div class="grid-2-1">
+        <div>
+          <p class="eyebrow">Stop discipline</p>
+          <h2 style="margin-bottom: 24px;">Knowing when it's done.</h2>
+          <p class="lead">The failure mode of every agent stack isn't starting — it's stopping. Cadre borrows the instincts of the laziest senior dev in the room: reach for what exists before writing, spend context like it's your own money, touch the smallest possible surface, and treat the ask as a contract with edges. Named hands carry craft; the plan you already pay for carries cost.</p>
+          <div class="steps" style="margin-top: 34px;">
+            <div class="step">
+              <span class="step-num">01</span>
+              <div><h3>Scope lock</h3><p>The brief becomes a manifest the moment work starts: intended files, excluded paths, an explicit done-condition. Every loop re-reads it. Drift outside the manifest — a new file, an un-asked refactor — and the gate asks why before the work counts.</p></div>
+            </div>
+            <div class="step">
+              <span class="step-num">02</span>
+              <div><h3>Frugal pipes, living map</h3><p>Tool output is filtered and compressed before it reaches a lane — diffs over dumps, a map slice over the whole repo. There is no fixed savings ratio. The map rebuilds when a source file is newer, and a file that failed last time is named first.</p></div>
+            </div>
+            <div class="step">
+              <span class="step-num">03</span>
+              <div><h3>Precise hands</h3><p>Edits stay inside the scope lock. On macOS, Seatbelt denies a write outside the allowed path. Elsewhere the same check runs in the process. A file outside the lock is reverted unless <span style="font-family: var(--font-mono);">--why</span> names it.</p></div>
+            </div>
+            <div class="step">
+              <span class="step-num">04</span>
+              <div><h3>Done means done, by named skilled hands</h3><p>Success is the done-condition met — checks green, evidence cited, budget inside the cap. Not one more file. Workers can be named agents that persist across runs, carrying craft as versioned skills; cost can ride the CLI plan you already pay for. The gate stamps PROVEN and the run actually stops.</p></div>
+            </div>
+            </div>
+        </div>
+        <div>
+          <div class="term" id="discipline-term" data-od-id="discipline-terminal">
+            <div class="term-head">
+              <span class="term-dot" aria-hidden="true"></span><span class="term-dot" aria-hidden="true"></span><span class="term-dot" aria-hidden="true"></span>
+              <span class="term-title">cadre go · scope-locked</span>
+              <span class="term-badge">simulated</span>
+            </div>
+            <div class="term-body" role="log" aria-label="Simulated scope-locked run with creep caught"></div>
+          </div>
+          <div class="lane-card" style="margin-top: 16px;" aria-label="What the discipline layer steals from the best tools">
+            <div style="color: var(--tdim); font-family: var(--font-body); font-size: 12px; letter-spacing: 0.09em; text-transform: uppercase; margin-bottom: 10px;">borrowed instincts · credited sources</div>
+            <div><span class="k">laziest senior dev</span>&nbsp;&nbsp;<span class="v-a">write only what the ask needs</span></div>
+            <div><span class="k">quiet hands</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="v-a">compress the chatter, keep the signal</span></div>
+            <div><span class="k">living graph</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="v-g">navigate by map, not by re-reading</span></div>
+            <div><span class="k">patch + confine</span>&nbsp;&nbsp;&nbsp;<span class="v-r">smallest diff, enforced boundary</span></div>
+            <div><span class="k">named hands</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="v-a">sol builds, terra reviews — and remembers</span></div>
+            <div><span class="k">plan rider</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="v-a">auth once, ride the sub you already own</span></div>
+            <div><span class="k">craft skills</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="v-y">how work is done, not just what gets done</span></div>
+            <div style="margin-top: 10px; border-top: 1px dashed var(--tborder); padding-top: 10px;"><span class="v-y">rule</span>&nbsp;&nbsp;<span class="k">the ask is a contract — the gate reads its edges</span></div>
+          </div>
+          <p class="lane-cap">Standing on the shoulders of ponytail, caveman, graphify, Chisel, rtk — and espresso, 9router, superpowers: named agents that persist, plans you already pay for, craft as named skills. The instincts are theirs; the wiring into one gate is ours.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3 · lanes -->
+  <section class="section" id="lanes" data-od-id="lanes">
+    <div class="container">
+      <div class="grid-2-1">
+        <div>
+          <p class="eyebrow">The universal adapter</p>
+          <h2 style="margin-bottom: 24px;">Everything becomes a lane.</h2>
+          <p class="lead">A lane is the smallest contract in Cadre: a name, what it's good at, what it costs, and how to talk to it. Cloud models speak it. CLI agents speak it. That GUI bot you leave running speaks it. So does the teammate who reviews diffs on Slack.</p>
+          <p class="lead" style="margin-top: 14px;">The harness never asks what's behind the curtain — only what a lane can do, and what it can prove.</p>
+          <div class="chips" style="margin-top: 28px;" aria-label="Adapters available out of the box">
+            <span class="tag">OpenAI-compatible</span><span class="tag">Anthropic</span><span class="tag">Gemini</span><span class="tag">GLM</span><span class="tag">Grok</span><span class="tag">Ollama</span><span class="tag">Claude Code</span><span class="tag">Cursor</span><span class="tag">MCP servers</span><span class="tag">GUI bots</span><span class="tag">humans</span>
+          </div>
+          <p class="meta" style="margin-top: 12px;">A scanned CLI, app, or key with no driver stays on the roster as presence-only. It is listed. It is not invoked.</p>
+        </div>
+        <div>
+          <div class="lane-card" aria-label="The lane contract">
+            <div><span class="k">lane</span> {</div>
+            <div>&nbsp;&nbsp;name:    <span class="v-a">"claude-code"</span></div>
+            <div>&nbsp;&nbsp;identity: sol-class · persists across runs</div>
+            <div>&nbsp;&nbsp;good_at: [<span class="v-a">refactor</span>, <span class="v-a">tests</span>]</div>
+            <div>&nbsp;&nbsp;cost:    metered, per-use — or rides a sub you own</div>
+            <div>&nbsp;&nbsp;talks:   terminal · exit 0/1</div>
+            <div>&nbsp;&nbsp;proves:  diffs + test output</div>
+            <div>&nbsp;&nbsp;craft:   skills it swears by — named, versioned</div>
+            <div>}</div>
+          </div>
+          <p class="lane-cap">Seven fields. Named agents persist their craft and quirks across runs; cost can ride the CLI plan you already pay for instead of a fresh API key.</p>
+        </div>
+      </div>
+
+      <div class="adapter" data-od-id="adapter-diagram">
+        <div class="adapter-row">
+          <div class="adapter-col">
+            <div class="src-card"><h4>Cloud models</h4><p>OpenAI-compatible · Anthropic · Gemini · GLM · Grok · anything with an endpoint</p></div>
+            <div class="src-card"><h4>Local &amp; desktop bots</h4><p>Claude Code · Cursor · Ollama · MCP servers · that GUI app you leave running</p></div>
+            <div class="src-card"><h4>Humans</h4><p>a teammate on Slack · you, at the prompt, when judgment matters</p></div>
+          </div>
+          <div class="adapter-arrow" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 12h15m-6-6 6 6-6 6"/></svg>
+          </div>
+          <div>
+            <div class="lane-card" style="text-align: left;">
+              <div style="color: var(--tdim); font-family: var(--font-body); font-size: 12px; letter-spacing: 0.09em; text-transform: uppercase; margin-bottom: 10px;">the lane contract</div>
+              <div><span class="k">in</span>&nbsp;&nbsp;· a brief, a budget</div>
+              <div><span class="k">out</span>&nbsp;· work + evidence</div>
+              <div style="margin-top: 10px;"><span class="v-g">same shape, any brain</span></div>
+            </div>
+          </div>
+          <div class="adapter-arrow" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 12h15m-6-6 6 6-6 6"/></svg>
+          </div>
+          <div class="harness-card">
+            <h4>the harness</h4>
+            <div class="loop" aria-label="Run loop: plan, build, critique, verify, repeat">
+              <span class="loop-pill lp-a">plan</span><span class="loop-sep">→</span>
+              <span class="loop-pill lp-b">build</span><span class="loop-sep">→</span>
+              <span class="loop-pill lp-r">critique</span><span class="loop-sep">→</span>
+              <span class="loop-pill lp-g">verify</span><span class="loop-sep">↺</span>
+            </div>
+            <div class="gate-line">
+              <span class="gate-chip">gate</span>
+              <p>nothing exits without checkable evidence</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <figure data-od-id="architecture-figure" style="margin: 46px 0 0;">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" style="width:100%;height:auto;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg)" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" role="img" aria-labelledby="svg-title">
+  <title id="svg-title">Cadre architecture: cloud models, local bots and humans become lanes through one contract; the harness loops plan, build, critique, verify behind an evidence gate; one command in, proof and audit out.</title>
+
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#b3ac9c"/>
+    </marker>
+  </defs>
+
+  <!-- paper -->
+  <rect width="1600" height="900" fill="#faf9f4"/>
+
+  <!-- ── header ─────────────────────────────────────── -->
+  <text x="40" y="58" font-family="ui-monospace, 'SF Mono', Menlo, monospace" font-size="13" letter-spacing="2.5" fill="#9c4523">CADRE · SYSTEM ON A CARD</text>
+  <text x="40" y="106" font-family="'Iowan Old Style', Charter, Georgia, serif" font-size="42" letter-spacing="-0.8" fill="#201d17">Any model. Any bot. One command.</text>
+  <text x="40" y="138" font-size="15" fill="#6d675b">The harness never asks what is behind the curtain — only what a lane can do, and what it can prove.</text>
+
+  <!-- ── column titles ──────────────────────────────── -->
+  <text x="40"  y="196" font-family="ui-monospace, Menlo, monospace" font-size="12" letter-spacing="1.8" fill="#6d675b">WHAT YOU ALREADY RUN</text>
+  <text x="430" y="196" font-family="ui-monospace, Menlo, monospace" font-size="12" letter-spacing="1.8" fill="#6d675b">THE LANE CONTRACT</text>
+  <text x="790" y="196" font-family="ui-monospace, Menlo, monospace" font-size="12" letter-spacing="1.8" fill="#6d675b">THE HARNESS</text>
+  <text x="1230" y="196" font-family="ui-monospace, Menlo, monospace" font-size="12" letter-spacing="1.8" fill="#6d675b">WHAT YOU KEEP</text>
+
+  <!-- ── col 1 · sources ────────────────────────────── -->
+  <g>
+    <rect x="40" y="220" width="330" height="118" rx="10" fill="#ffffff" stroke="#e6e1d4"/>
+    <text x="64" y="252" font-size="16" font-weight="600" fill="#201d17">Cloud models</text>
+    <text x="64" y="278" font-family="ui-monospace, Menlo, monospace" font-size="11.5" fill="#6d675b">OpenAI-compatible · Anthropic · Gemini</text>
+    <text x="64" y="298" font-family="ui-monospace, Menlo, monospace" font-size="11.5" fill="#6d675b">GLM · Grok · anything with an endpoint</text>
+    <text x="64" y="322" font-family="ui-monospace, Menlo, monospace" font-size="11.5" fill="#9c4523">adapter: speaks HTTP</text>
+
+    <rect x="40" y="354" width="330" height="118" rx="10" fill="#ffffff" stroke="#e6e1d4"/>
+    <text x="64" y="386" font-size="16" font-weight="600" fill="#201d17">Local &amp; desktop bots</text>
+    <text x="64" y="412" font-family="ui-monospace, Menlo, monospace" font-size="11.5" fill="#6d675b">Claude Code · Cursor · Ollama</text>
+    <text x="64" y="432" font-family="ui-monospace, Menlo, monospace" font-size="11.5" fill="#6d675b">MCP servers · GUI bots · scripts</text>
+    <text x="64" y="456" font-family="ui-monospace, Menlo, monospace" font-size="11.5" fill="#9c4523">adapter: speaks stdin / exit 0-1</text>
+
+    <rect x="40" y="488" width="330" height="118" rx="10" fill="#ffffff" stroke="#e6e1d4"/>
+    <text x="64" y="520" font-size="16" font-weight="600" fill="#201d17">Humans</text>
+    <text x="64" y="546" font-family="ui-monospace, Menlo, monospace" font-size="11.5" fill="#6d675b">a teammate on Slack · you at the prompt</text>
+    <text x="64" y="566" font-family="ui-monospace, Menlo, monospace" font-size="11.5" fill="#6d675b">judgment calls, taste, sign-off</text>
+    <text x="64" y="590" font-family="ui-monospace, Menlo, monospace" font-size="11.5" fill="#9c4523">adapter: asks nicely, respects quiet hours</text>
+  </g>
+
+  <!-- arrow 1 -->
+  <line x1="375" y1="383" x2="422" y2="383" stroke="#b3ac9c" stroke-width="1.6" marker-end="url(#arr)"/>
+
+  <!-- ── col 2 · lane contract (terminal card) ──────── -->
+  <g>
+    <rect x="430" y="220" width="300" height="386" rx="14" fill="#181510" stroke="#2b261d"/>
+    <circle cx="454" cy="246" r="5.5" fill="#35301f" stroke="#453d28"/>
+    <circle cx="472" cy="246" r="5.5" fill="#35301f" stroke="#453d28"/>
+    <circle cx="490" cy="246" r="5.5" fill="#35301f" stroke="#453d28"/>
+    <text x="510" y="250" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#9a9280">contract</text>
+
+    <text x="456" y="300" font-family="ui-monospace, Menlo, monospace" font-size="14" fill="#ece6d6">lane {</text>
+    <text x="476" y="326" font-family="ui-monospace, Menlo, monospace" font-size="13" fill="#9a9280">name</text>
+    <text x="540" y="326" font-family="ui-monospace, Menlo, monospace" font-size="13" fill="#62b9cb">"whoever fits"</text>
+    <text x="476" y="350" font-family="ui-monospace, Menlo, monospace" font-size="13" fill="#9a9280">identity</text>
+    <text x="560" y="350" font-family="ui-monospace, Menlo, monospace" font-size="13" fill="#62b9cb">named · persists</text>
+    <text x="476" y="374" font-family="ui-monospace, Menlo, monospace" font-size="13" fill="#9a9280">good_at</text>
+    <text x="560" y="374" font-family="ui-monospace, Menlo, monospace" font-size="13" fill="#62b9cb">[ … ]</text>
+    <text x="476" y="398" font-family="ui-monospace, Menlo, monospace" font-size="13" fill="#9a9280">cost</text>
+    <text x="524" y="398" font-family="ui-monospace, Menlo, monospace" font-size="13" fill="#62b9cb">metered · plan · rollover · free</text>
+    <text x="476" y="422" font-family="ui-monospace, Menlo, monospace" font-size="13" fill="#9a9280">talks</text>
+    <text x="524" y="422" font-family="ui-monospace, Menlo, monospace" font-size="13" fill="#62b9cb">http · stdin · chat</text>
+    <text x="476" y="446" font-family="ui-monospace, Menlo, monospace" font-size="13" fill="#9a9280">proves</text>
+    <text x="540" y="446" font-family="ui-monospace, Menlo, monospace" font-size="13" fill="#97c377">work + evidence</text>
+    <text x="476" y="470" font-family="ui-monospace, Menlo, monospace" font-size="13" fill="#9a9280">craft</text>
+    <text x="524" y="470" font-family="ui-monospace, Menlo, monospace" font-size="13" fill="#97c377">named, versioned skills</text>
+    <text x="456" y="496" font-family="ui-monospace, Menlo, monospace" font-size="14" fill="#ece6d6">}</text>
+
+    <line x1="456" y1="510" x2="704" y2="510" stroke="#2b261d" stroke-dasharray="4 4"/>
+    <text x="456" y="534" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="#9a9280">in</text>
+    <text x="484" y="534" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="#ece6d6">a brief · a budget</text>
+    <text x="456" y="556" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="#9a9280">out</text>
+    <text x="484" y="556" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="#ece6d6">work + evidence</text>
+    <text x="456" y="586" font-family="ui-monospace, Menlo, monospace" font-size="12.5" fill="#97c377">same shape, any brain</text>
+  </g>
+
+  <!-- arrow 2 -->
+  <line x1="735" y1="383" x2="782" y2="383" stroke="#b3ac9c" stroke-width="1.6" marker-end="url(#arr)"/>
+
+  <!-- ── col 3 · the harness ────────────────────────── -->
+  <g>
+    <rect x="790" y="220" width="380" height="386" rx="14" fill="#ffffff" stroke="#201d17" stroke-width="1.4"/>
+
+    <!-- loop pills row 1 -->
+    <rect x="818" y="252" width="76" height="32" rx="16" fill="#faf9f4" stroke="#e5d3ac"/>
+    <text x="856" y="273" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="13" fill="#8a6420">plan</text>
+    <text x="906" y="273" font-family="ui-monospace, Menlo, monospace" font-size="13" fill="#b3ac9c">→</text>
+    <rect x="926" y="252" width="80" height="32" rx="16" fill="#faf9f4" stroke="#bedde3"/>
+    <text x="966" y="273" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="13" fill="#2e7280">build</text>
+    <text x="1018" y="273" font-family="ui-monospace, Menlo, monospace" font-size="13" fill="#b3ac9c">→</text>
+    <rect x="1038" y="252" width="100" height="32" rx="16" fill="#faf9f4" stroke="#ecd0d9"/>
+    <text x="1088" y="273" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="13" fill="#93536a">critique</text>
+
+    <!-- loop pills row 2 -->
+    <rect x="818" y="300" width="88" height="32" rx="16" fill="#faf9f4" stroke="#cfe2bb"/>
+    <text x="862" y="321" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="13" fill="#4e7133">verify</text>
+    <text x="918" y="321" font-family="ui-monospace, Menlo, monospace" font-size="13" fill="#b3ac9c">↺</text>
+    <text x="944" y="321" font-family="ui-monospace, Menlo, monospace" font-size="11.5" fill="#6d675b">until the gate holds</text>
+
+    <!-- choreography notes -->
+    <line x1="818" y1="358" x2="1142" y2="358" stroke="#e6e1d4"/>
+    <text x="818" y="388" font-family="ui-monospace, Menlo, monospace" font-size="11.5" fill="#6d675b">· parallel where it helps</text>
+    <text x="818" y="410" font-family="ui-monospace, Menlo, monospace" font-size="11.5" fill="#6d675b">· sequential where it matters</text>
+    <text x="818" y="432" font-family="ui-monospace, Menlo, monospace" font-size="11.5" fill="#6d675b">· one stream for you</text>
+
+    <!-- gate -->
+    <line x1="818" y1="460" x2="1142" y2="460" stroke="#e6e1d4" stroke-dasharray="4 4"/>
+    <rect x="818" y="486" width="64" height="26" rx="5" fill="none" stroke="#9c4523" stroke-width="1.6" transform="rotate(-1.5 850 499)"/>
+    <text x="850" y="504" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="11.5" letter-spacing="1.5" fill="#9c4523" transform="rotate(-1.5 850 499)">GATE</text>
+    <text x="898" y="504" font-size="12.5" fill="#6d675b">nothing exits without</text>
+    <text x="898" y="524" font-size="12.5" fill="#6d675b">checkable evidence</text>
+
+    <text x="818" y="570" font-family="ui-monospace, Menlo, monospace" font-size="11.5" fill="#6d675b">evidence = commands + output · diffs</text>
+    <text x="818" y="590" font-family="ui-monospace, Menlo, monospace" font-size="11.5" fill="#6d675b">· artifacts · citations</text>
+  </g>
+
+  <!-- arrow 3 -->
+  <line x1="1175" y1="383" x2="1222" y2="383" stroke="#b3ac9c" stroke-width="1.6" marker-end="url(#arr)"/>
+
+  <!-- ── col 4 · outputs ────────────────────────────── -->
+  <g>
+    <rect x="1230" y="220" width="330" height="182" rx="10" fill="#ffffff" stroke="#e6e1d4"/>
+    <text x="1254" y="252" font-size="16" font-weight="600" fill="#201d17">Proof bundle</text>
+    <text x="1254" y="280" font-family="ui-monospace, Menlo, monospace" font-size="11.5" fill="#6d675b">cadre proof [run]</text>
+    <text x="1254" y="306" font-family="ui-monospace, Menlo, monospace" font-size="11.5" fill="#6d675b">· commands, with output</text>
+    <text x="1254" y="326" font-family="ui-monospace, Menlo, monospace" font-size="11.5" fill="#6d675b">· files, with diffs</text>
+    <text x="1254" y="346" font-family="ui-monospace, Menlo, monospace" font-size="11.5" fill="#6d675b">· artifacts you can open</text>
+    <text x="1254" y="366" font-family="ui-monospace, Menlo, monospace" font-size="11.5" fill="#6d675b">· citations you can follow</text>
+    <text x="1254" y="386" font-family="ui-monospace, Menlo, monospace" font-size="11.5" fill="#9c4523">· parity ledger — behaviors ↔ citations</text>
+
+    <rect x="1230" y="424" width="330" height="182" rx="10" fill="#ffffff" stroke="#e6e1d4"/>
+    <text x="1254" y="456" font-size="16" font-weight="600" fill="#201d17">Audit trail</text>
+    <text x="1254" y="484" font-family="ui-monospace, Menlo, monospace" font-size="11.5" fill="#6d675b">~/.cadre/runs/*.log</text>
+    <text x="1254" y="510" font-family="ui-monospace, Menlo, monospace" font-size="11.5" fill="#6d675b">· what was asked, who did what</text>
+    <text x="1254" y="530" font-family="ui-monospace, Menlo, monospace" font-size="11.5" fill="#6d675b">· what it cost, what proved it</text>
+    <text x="1254" y="556" font-family="ui-monospace, Menlo, monospace" font-size="11.5" fill="#9c4523">replay any run, any time</text>
+
+    <!-- stamp -->
+    <g transform="rotate(-7 1380 350)">
+      <circle cx="1500" cy="300" r="52" fill="none" stroke="#9c4523" stroke-width="2.5" stroke-dasharray="0"/>
+      <circle cx="1500" cy="300" r="46" fill="none" stroke="#9c4523" stroke-width="1"/>
+      <text x="1500" y="296" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="13" letter-spacing="2" fill="#9c4523">PROVEN</text>
+      <text x="1500" y="314" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="9" letter-spacing="1.5" fill="#9c4523">RUN 0148</text>
+    </g>
+  </g>
+
+  <!-- ── bottom strip · the one command timeline ────── -->
+  <rect x="40" y="650" width="1520" height="212" rx="14" fill="#181510"/>
+  <text x="72" y="696" font-family="ui-monospace, Menlo, monospace" font-size="12" letter-spacing="2" fill="#9a9280">WHAT THE ONE COMMAND DOES</text>
+  <text x="72" y="726" font-family="ui-monospace, Menlo, monospace" font-size="15" fill="#ece6d6">$ cadre go "an outcome, not a prompt"</text>
+  <text x="72" y="748" font-family="ui-monospace, Menlo, monospace" font-size="13" fill="#d6a34d">parity&#160;&#160;$ cadre parity "match X" --ref</text>
+  <text x="330" y="748" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#9a9280">contract → bench → loop → ledger · unattended, budget-capped</text>
+
+  <line x1="72" y1="790" x2="1528" y2="790" stroke="#2b261d"/>
+
+  <g font-family="ui-monospace, Menlo, monospace">
+    <text x="72"  y="770" font-size="12" fill="#d6a34d">01</text>
+    <text x="72"  y="820" font-size="13" fill="#ece6d6">read the room</text>
+    <text x="72"  y="840" font-size="10.5" fill="#9a9280">scan CLIs, apps, keys, people</text>
+
+    <text x="362" y="770" font-size="12" fill="#d6a34d">02</text>
+    <text x="362" y="820" font-size="13" fill="#ece6d6">form the cadre</text>
+    <text x="362" y="840" font-size="10.5" fill="#9a9280">roles by fit, not loyalty</text>
+
+    <text x="652" y="770" font-size="12" fill="#62b9cb">03</text>
+    <text x="652" y="820" font-size="13" fill="#ece6d6">run the loop</text>
+    <text x="652" y="840" font-size="10.5" fill="#9a9280">plan · build · critique · verify</text>
+
+    <text x="942" y="770" font-size="12" fill="#d67f95">04</text>
+    <text x="942" y="820" font-size="13" fill="#ece6d6">gate on proof</text>
+    <text x="942" y="840" font-size="10.5" fill="#9a9280">evidence, or it isn't done</text>
+
+    <text x="1232" y="770" font-size="12" fill="#97c377">05</text>
+    <text x="1232" y="820" font-size="13" fill="#ece6d6">file the receipts</text>
+    <text x="1232" y="840" font-size="10.5" fill="#9a9280">local audit trail, replayable</text>
+  </g>
+</svg>
+
+      <figcaption>The whole system on one card — one command in, proof and audit out.</figcaption>
+    </figure>
+    </div>
+  </section>
+
+  <!-- 4 · playground -->
+  <section class="section" id="playground" data-od-id="playground">
+    <div class="container">
+      <p class="eyebrow">Try the flows</p>
+      <h2 style="margin-bottom: 12px;">A terminal you can actually poke.</h2>
+      <p class="lead" style="margin-bottom: 30px;">Every command from the concept, running on sample lanes. Click a chip or type — this is the real choreography, just simulated.</p>
+      <div class="chip-row" role="group" aria-label="Command chips">
+        <button class="chip" data-cmd="cadre sweep">cadre sweep</button>
+        <button class="chip" data-cmd="cadre pin">cadre pin</button>
+        <button class="chip" data-cmd="cadre mcp">cadre mcp</button>
+        <button class="chip" data-cmd="cadre map">cadre map</button>
+        <button class="chip" data-cmd="cadre meter">cadre meter</button>
+        <button class="chip" data-cmd='cadre parity --until-proven --ref SPEC.md "match the spec"'>cadre parity</button>
+        <button class="chip" data-cmd='cadre plan "port checkout to flutter"'>cadre plan</button>
+        <button class="chip" data-cmd='cadre go "ship the weekly changelog"'>cadre go</button>
+        <button class="chip" data-cmd="cadre lanes">cadre lanes</button>
+        <button class="chip" data-cmd='cadre debate "rewrite auth this week or next?"'>cadre debate</button>
+        <button class="chip" data-cmd="cadre watch 0152">cadre watch</button>
+        <button class="chip" data-cmd="cadre proof 0148">cadre proof</button>
+        <button class="chip" data-cmd="help">help</button>
+        <span class="chip-hint">↑ history · try typing</span>
+      </div>
+      <div class="term" id="pg-term">
+        <div class="term-head">
+          <span class="term-dot" aria-hidden="true"></span><span class="term-dot" aria-hidden="true"></span><span class="term-dot" aria-hidden="true"></span>
+          <span class="term-title">cadre — playground</span>
+          <span class="term-badge">simulated</span>
+        </div>
+        <div class="term-body" id="pg-body" role="log" aria-label="Interactive simulated terminal" aria-live="polite">
+          <div class="tl c-d">cadre playground · 6 sample lanes loaded · type <span class="sp">help</span> or click a chip</div>
+          <div class="term-input-line" id="pg-input-line">
+            <span class="tl c-bt" aria-hidden="true">$</span>
+            <input class="term-input" id="pg-input" type="text" autocomplete="off" spellcheck="false" enterkeyhint="send" aria-label="Type a cadre command" placeholder='try: cadre go "fix the flaky checkout test"'>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4.5 · surfaces (in your editor) -->
+  <section class="section" id="surfaces" data-od-id="surfaces">
+    <div class="container">
+      <div class="grid-2-1">
+        <div>
+          <p class="eyebrow">In your editor, not another window</p>
+          <h2 style="margin-bottom: 24px;">The GUI is the one you already use.</h2>
+          <p class="lead">Cadre doesn't add another app to babysit. It shows up as native tools inside the coding platform you're in — Cursor's agent panel, VS Code's chat, Claude Desktop, any MCP client. The platform's agent becomes the driver; the harness stays the engine.</p>
+          <div class="steps" style="margin-top:  34px;">
+            <div class="step">
+              <span class="step-num">01</span>
+              <div><h3>Connect once</h3><p><span style="font-family: var(--font-mono); font-size: 14px;">cadre mcp</span> prints a five-line config. Paste it into your client and twelve tools appear — go, parity, plan, meter, map, sweep, lanes, watch, proof, debate, pin, and doctor. No plugin store, no account. Cadre does not draw the panel; the host agent does.</p></div>
+            </div>
+            <div class="step">
+              <span class="step-num">02</span>
+              <div><h3>Drive from chat</h3><p>Ask in plain language. The platform's agent picks the command, feeds it the outcome, and cites the proof bundle back to you — evidence, not prose.</p></div>
+            </div>
+            <div class="step">
+              <span class="step-num">03</span>
+              <div><h3>Watch in place</h3><p>Runs, meters and gates surface as tool activity in the panel you already watch. No second dashboard competing for your attention.</p></div>
+            </div>
+            <div class="step">
+              <span class="step-num">04</span>
+              <div><h3>One source of truth</h3><p>Start a run in the editor, finish it in the shell — or the reverse. Both surfaces read the same local ledger; nothing forks, nothing drifts.</p></div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div class="chat-card" id="chat-card" data-od-id="chat-mock">
+            <div class="chat-head">
+              <span class="meta">cursor · agent panel</span>
+              <span class="chat-badge">simulated</span>
+            </div>
+            <div class="chat-body">
+              <div class="msg you">
+                <span class="who">you</span>
+                <p>match dark-mode with the iOS app</p>
+              </div>
+              <div class="msg agent">
+                <span class="who">cursor</span>
+                <div class="toolcard">
+                  <div class="toolcard-head">
+                    <span class="tname">cadre.parity</span>
+                    <span class="tstate ok">✓ gate passed</span>
+                  </div>
+                  <div class="toolcard-rows">
+                    <div class="tr-row">ref SPEC.md · 2 checks · create hello.txt · src/utils.js contains greet</div>
+                    <div class="tr-row">loop 2 — 1 closed · 1 open · metered 0</div>
+                    <div class="tr-row ok">✓ ALL BEHAVIORS CLOSED · gate: PROVEN</div>
+                  </div>
+                </div>
+                <p>Done — the named checks passed. Proof bundle: <span class="tlink">run 0068 · cadre proof 0068</span>.</p>
+              </div>
+            </div>
+          </div>
+          <div class="lane-card" style="margin-top: 16px;" aria-label="The cadre mcp tool head">
+            <div style="color: var(--tdim); font-family: var(--font-body); font-size: 12px; letter-spacing: 0.09em; text-transform: uppercase; margin-bottom: 10px;">cadre mcp · the tool head</div>
+            <div><span class="k">serves</span>&nbsp;&nbsp;twelve tools · stdio · the host draws the panel</div>
+            <div><span class="k">transport</span>&nbsp;&nbsp;stdio · local · zero cloud</div>
+            <div><span class="k">clients</span>&nbsp;&nbsp;cursor · vs code chat · claude desktop</div>
+            <div style="margin-top: 10px; border-top: 1px dashed var(--tborder); padding-top: 10px;"><span class="v-g">same gate · same ledger · new view</span></div>
+          </div>
+          <p class="lane-cap">The GUI agent drives; Cadre runs. Both the panel and your terminal read the same runs/*.log — start anywhere, continue anywhere.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5 · evidence gate -->
+  <section class="section" id="proof" data-od-id="proof">
+    <div class="container gate-grid">
+      <div>
+        <p class="eyebrow">The evidence gate</p>
+        <h2 style="margin-bottom: 22px;">"Done" is a claim.<br>Proof is a checkpoint.</h2>
+        <p class="lead">Most agent stacks stop at confident prose. Cadre ends runs at a gate — four kinds of evidence, checkable by anyone: commands with their output, files with their diffs, artifacts you can open, citations you can follow.</p>
+        <p class="lead" style="margin-top: 14px;">If a lane can't produce evidence, its work doesn't count as done. It goes back, or it goes away.</p>
+        <div class="compare" aria-label="Promise culture versus proof culture">
+          <div class="compare-row">
+            <div class="compare-head no">promise culture</div>
+            <div class="compare-head yes">proof culture</div>
+          </div>
+          <div class="compare-row"><div>trust the summary</div><div>read the transcript</div></div>
+          <div class="compare-row"><div>vibes = shipped</div><div>gate, or it didn't happen</div></div>
+          <div class="compare-row"><div>logs rot in someone's cloud</div><div>replayable, on your disk</div></div>
+        </div>
+      </div>
+      <div>
+        <div class="stamp" role="img" aria-label="Stamp reading: proven, run 0148, evidence attached">
+          <span class="stamp-word">proven</span>
+          <span class="stamp-rule" aria-hidden="true"></span>
+          <span class="stamp-sub">run 0148</span>
+          <span class="stamp-sub">evidence attached</span>
+        </div>
+        <p style="text-align: center; margin-top: 26px;" class="meta">the only certificate cadre prints</p>
+          
+          <div style="margin-top: 34px;"><div class="term" id="sweep-term" data-od-id="sweep-terminal">
+            <div class="term-head">
+              <span class="term-dot" aria-hidden="true"></span><span class="term-dot" aria-hidden="true"></span><span class="term-dot" aria-hidden="true"></span>
+              <span class="term-title">cadre sweep</span>
+              <span class="term-badge">simulated</span>
+            </div>
+            <div class="term-body" role="log" aria-label="Simulated leftover sweep"></div>
+          </div></div>
+          <div class="lane-card" style="margin-top: 16px;" aria-label="What counts as a leftover">
+            <div style="color: var(--tdim); font-family: var(--font-body); font-size: 12px; letter-spacing: 0.09em; text-transform: uppercase; margin-bottom: 10px;">what counts as a leftover</div>
+            <div><span class="k">Ctrl-C mid-run</span>&nbsp;&nbsp;&nbsp;&nbsp;<span class="v-r">filed as interrupted</span></div>
+            <div><span class="k">quota dry</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="v-y">window emptied</span></div>
+            <div><span class="k">timeout</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="v-r">lane exceeded limit</span></div>
+            <div><span class="k">plan changed</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="v-a">ref moved · brief rewritten</span></div>
+            <div style="margin-top: 10px; border-top: 1px dashed var(--tborder); padding-top: 10px;"><span class="v-g">rule</span>&nbsp;&nbsp;<span class="k">every ending is a filed state</span></div>
+          </div>
+          <p class="lane-cap">A new go folds a leftover with the same brief into the run. Anything else waits for <span style="font-family: var(--font-mono);">cadre sweep</span>.</p>
+          <h3 style="margin-top: 40px;">Interrupted is not abandoned.</h3>
+          <p class="lead" style="font-size: 16px; margin-top: 12px;">Ctrl-C, an empty quota, or a moved reference leaves a filed run. Sweep triages it. <span style="font-family: var(--font-mono);">cadre go --resume</span> continues from the phase checkpoint. The killed process is not restored.</p>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- 6 · commands -->
+  <section class="section" id="commands" data-od-id="commands">
+    <div class="container">
+      <p class="eyebrow">The whole CLI</p>
+      <h2 style="margin-bottom: 10px;">Fourteen commands, plus --version.</h2>
+      <p class="lead" style="margin-bottom: 38px;">One you'll use daily. One that builds until the named checks pass. One that plans the spend. One that shows the meters. One that hunts the leftovers. One that runs the codebase map. One that lives in your editor's chat. Doctor and init are the cold start.</p>
+      <table class="cmd-table">
+        <thead><tr><th>command</th><th>what it does</th><th>useful flags</th></tr></thead>
+        <tbody>
+          <tr><td><strong>cadre go</strong> "outcome"</td><td><strong>The one command.</strong> Scans lanes, assembles the crew, runs the loop, gates on evidence, files the receipts.</td><td class="fl">--dry · --role builder=sol · --budget 200000 · --scope · --resume id</td></tr>
+          <tr><td><strong>cadre parity</strong> --until-proven --ref file</td><td><strong>The unattended build.</strong> A named check has to pass. Prose is not built. Stretch runs after core only when the goal says to go beyond parity.</td><td class="fl">--ref file · --max-iter · --resume last</td></tr>
+          <tr><td><strong>cadre plan</strong> "task"</td><td>The spend planner. Routes the task and labels token estimates as heuristic. History of the same task class is the bench.</td><td class="fl">--role</td></tr>
+          <tr><td><strong>cadre meter</strong></td><td>Quotas you declared, a loopback status read, and on-disk CLI usage. Token counts. No dollar figure.</td><td class="fl">--set · --status-url · --json</td></tr>
+          <tr><td><strong>cadre map</strong></td><td>Symbols, dependencies, hot zones. Rebuilt when a source file is newer than the index.</td><td class="fl">--why symbol</td></tr>
+          <tr><td><strong>cadre sweep</strong></td><td>Leftovers: interrupted, empty quota, a moved reference. Retire one, or write a resume plan.</td><td class="fl">--all · --retire id · --resume id</td></tr>
+          <tr><td><strong>cadre mcp</strong></td><td>Prints a five-line config on a terminal. Piped, it speaks MCP on stdio. Twelve tools. The host draws the panel.</td><td class="fl">none</td></tr>
+          <tr><td><strong>cadre lanes</strong></td><td>Who is on this machine, what they are good at, what they cost, who is busy.</td><td class="fl">--json</td></tr>
+          <tr><td><strong>cadre watch</strong> id</td><td>Tail a run log. --replay prints the settled log.</td><td class="fl">--replay</td></tr>
+          <tr><td><strong>cadre proof</strong> id</td><td>The evidence bundle: commands, diffs, artifacts, citations. --verify re-runs the commands.</td><td class="fl">--verify</td></tr>
+          <tr><td><strong>cadre debate</strong> "question"</td><td>Two ax lanes argue. Needs ax on the machine. Transcripts are filed under ~/.cadre.</td><td class="fl">needs ax</td></tr>
+          <tr><td><strong>cadre pin</strong></td><td>Optional guardrails: pin a role, cap tokens, set quiet hours.</td><td class="fl">--role · --budget · --quiet · --clear</td></tr>
+          <tr><td><strong>cadre doctor</strong></td><td>Cold-machine preflight. One fix line per problem.</td><td class="fl">--json</td></tr>
+          <tr><td><strong>cadre init</strong></td><td>Scaffold ~/.cadre with an example lane. Running it again changes nothing.</td><td class="fl">idempotent</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- 7 · cta -->
+  <section class="section cta-strip" data-od-id="cta">
+    <div class="container" style="max-width: 640px;">
+      <h2>The CLI is installed.<br>This page's terminals are a simulation.</h2>
+      <p class="lead" style="margin-inline: auto;">The commands and flags above are the ones <span style="font-family: var(--font-mono);">cadre --help</span> prints. The animated terminals use sample lanes so the page can play without spending a run.</p>
+      <p class="meta" style="font-family: var(--font-mono);">cadre 0.2.0 · ~/.local/bin/cadre · state in ~/.cadre</p>
+      <p class="meta" style="margin-top: 22px;">local-first · MIT · no telemetry · <span style="font-family: var(--font-mono);">runs/*.log</span> or it didn't happen</p>
+    </div>
+  </section>
+
+</main>
+
+<footer class="pagefoot" data-od-id="footer">
+  <div class="container row-between">
+    <span>cadre — a local model/bot-agnostic harness</span>
+    <span class="meta">any model · any bot · one command</span>
+  </div>
+</footer>
+
+<script>
+(function () {
+  'use strict';
+  var REDUCED = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  function sleep(ms) { return new Promise(function (r) { setTimeout(r, REDUCED ? 0 : ms); }); }
+
+  /* ── terminal engine ─────────────────────────────── */
+  function makeTerm(bodyEl) {
+    var runId = 0;
+    bodyEl.dataset.cancel = '';
+    function line(cls, html) {
+      var d = document.createElement('div');
+      d.className = 'tl' + (cls ? ' ' + cls : '');
+      d.innerHTML = html === undefined ? '&nbsp;' : html;
+      bodyEl.appendChild(d);
+      bodyEl.scrollTop = bodyEl.scrollHeight;
+      return d;
+    }
+    async function typeCmd(text, caret) {
+      var d = line('c-bt', '<span class="sp">$ </span><span class="tw"></span>' + (caret ? '<span class="term-caret"></span>' : ''));
+      var tw = d.querySelector('.tw');
+      for (var i = 0; i < text.length; i++) {
+        tw.textContent += text[i];
+        bodyEl.scrollTop = bodyEl.scrollHeight;
+        await sleep(30 + Math.random() * 40);
+      }
+      if (caret) { var c = d.querySelector('.term-caret'); if (c) c.remove(); }
+      return d;
+    }
+    async function play(script, token) {
+      for (var i = 0; i < script.length; i++) {
+        if (token !== runId) return false;
+        var s = script[i];
+        if (s.t === 'p') { await sleep(s.d === undefined ? 90 : s.d); if (token !== runId) return false; line(s.cls, s.html); }
+        else if (s.t === 'pause') { await sleep(s.d); }
+        else if (s.t === 'grow') {
+          var d = line(s.cls, s.html);
+          var bar = d.querySelector('.bar');
+          var n = 0;
+          while (n < s.fill) {
+            if (token !== runId) return false;
+            await sleep(s.tick || 70);
+            n++;
+            if (bar) bar.textContent = Array(n + 1).join('█');
+            bodyEl.scrollTop = bodyEl.scrollHeight;
+          }
+          await sleep(120);
+          if (token !== runId) return false;
+          d.innerHTML = s.done;
+          bodyEl.scrollTop = bodyEl.scrollHeight;
+        }
+      }
+      return true;
+    }
+    function clear() { runId++; bodyEl.innerHTML = ''; }
+    function cancel() { runId++; }
+    return { line: line, typeCmd: typeCmd, play: play, clear: clear, cancel: cancel, token: function () { return runId; } };
+  }
+
+  /* ── flows ───────────────────────────────────────── */
+  var F = {};
+  F.go = [
+    { t: 'type', x: 'cadre go "fix the flaky checkout test and open a PR"' },
+    { t: 'p', cls: 'c-d', html: 'fitting lanes .............. <span class="sp">4 of 6</span>', d: 420 },
+    { t: 'p', cls: 'c-a', html: 'sweep · run 0144 (interrupted Tue) folded in · 2 of 5 steps kept', d: 260 },
+    { t: 'p', cls: 'c-a', html: 'planner&nbsp;&nbsp;&nbsp;glm-5.3&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; brief accepted' },
+    { t: 'p', cls: 'c-b', html: 'builder&nbsp;&nbsp;&nbsp;claude-code&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;on the patch' },
+    { t: 'p', cls: 'c-r', html: 'critic&nbsp;&nbsp;&nbsp;&nbsp;gpt-5.2&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; counter-review' },
+    { t: 'p', cls: 'c-g', html: 'verifier&nbsp;&nbsp;python-local&nbsp;&nbsp;&nbsp;&nbsp;standing by', d: 220 },
+    { t: 'p', html: '&nbsp;' },
+    { t: 'p', cls: 'c-d', html: '── plan ────────────────────────────' },
+    { t: 'p', html: '&nbsp;1&nbsp;&nbsp;reproduce the failure&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <span class="sp">verifier</span>' },
+    { t: 'p', html: '&nbsp;2&nbsp;&nbsp;patch retry + backoff&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <span class="sp">builder</span>' },
+    { t: 'p', html: '&nbsp;3&nbsp;&nbsp;counter-review edge cases&nbsp;&nbsp;&nbsp;&nbsp; <span class="sp">critic</span>' },
+    { t: 'p', html: '&nbsp;4&nbsp;&nbsp;full suite → open PR&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <span class="sp">verifier</span>', d: 260 },
+    { t: 'p', html: '&nbsp;' },
+    { t: 'p', cls: 'c-g', html: '▸ reproduce&nbsp;&nbsp;████████████&nbsp;&nbsp;done&nbsp;&nbsp;<span class="sp">4.1s</span>' },
+    { t: 'p', cls: 'c-g', html: '▸ patch&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;████████████&nbsp;&nbsp;done&nbsp;&nbsp;<span class="sp">38s</span>', d: 600 },
+    { t: 'p', cls: 'c-bt', html: '▸ review&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;████████████&nbsp;&nbsp;done&nbsp;&nbsp;<span class="sp">2 findings</span>', d: 700 },
+    { t: 'p', html: '&nbsp;' },
+    { t: 'p', cls: 'c-e', html: '✗ gate: 2 findings unresolved', d: 500 },
+    { t: 'p', cls: 'c-r', html: '&nbsp;&nbsp;critic&nbsp;&nbsp;retry without backoff — checkout.py:142' },
+    { t: 'p', cls: 'c-r', html: '&nbsp;&nbsp;critic&nbsp;&nbsp;test name says unit, sleeps like integration' },
+    { t: 'p', cls: 'c-b', html: '→ builder patching · second pass', d: 900 },
+    { t: 'p', cls: 'c-d', html: 'meter · claude-max window burned to 8% since the last read → edges re-routed to glm-5.3', d: 300 },
+    { t: 'p', html: '&nbsp;' },
+    { t: 'p', cls: 'c-ok', html: '✓ gate passed — both findings closed', d: 800 },
+    { t: 'p', cls: 'c-bt', html: '&nbsp;&nbsp;14 commands · 3 diffs · PR #483 open · 2 citations' },
+    { t: 'p', cls: 'c-d', html: '&nbsp;&nbsp;proof filed → ~/.cadre/runs/0148/' }
+  ];
+  F.goScoped = [
+    { t: 'type', x: 'cadre go "fix the login 500" --scope lock' },
+    { t: 'p', cls: 'c-d', html: 'scope lock · <span class="sp">auth/** · done when the suite exits 0</span>', d: 420 },
+    { t: 'p', cls: 'c-bt', html: 'map · slice for the locked files · not the whole repo' },
+    { t: 'p', cls: 'c-bt', html: 'pipes · tool output compressed · diffs over dumps' },
+    { t: 'p', cls: 'c-bt', html: 'patch · auth/handler.py · +12 −9 · confined', d: 260 },
+    { t: 'p', html: '&nbsp;' },
+    { t: 'p', cls: 'c-e', html: '✗ creep caught · builder touched utils/dates.py — outside the lock', d: 500 },
+    { t: 'p', cls: 'c-r', html: '&nbsp;&nbsp;critic · "nice-to-have timezone guard — not in the ask"' },
+    { t: 'p', cls: 'c-b', html: '→ reverted · second pass stays inside auth/', d: 700 },
+    { t: 'p', html: '&nbsp;' },
+    { t: 'grow', cls: 'c-bt', html: 'verify&nbsp;&nbsp;<span class="bar">█</span>&nbsp;&nbsp;suite…', fill: 10, tick: 60, done: 'verify&nbsp;&nbsp;████████████&nbsp;&nbsp;24/24 green' },
+    { t: 'p', cls: 'c-ok', html: '✓ done means done · checks green · evidence cited · stopped', d: 400 },
+    { t: 'p', cls: 'c-d', html: '&nbsp;&nbsp;metered 0 of 200000 · gate: PROVEN' }
+  ];
+  F.map = [
+    { t: 'type', x: 'cadre map' },
+    { t: 'p', cls: 'c-d', html: 'graph · <span class="sp">warm · last indexed 4m ago</span>', d: 380 },
+    { t: 'p', cls: 'c-bt', html: '1,142 symbols · 3,209 edges · 2 hot zones' },
+    { t: 'p', cls: 'c-a', html: 'auth/handler.py&nbsp;&nbsp;&nbsp;<span class="sp">fan-in 14 · touched by 3 recent runs</span>' },
+    { t: 'p', cls: 'c-b', html: 'retry.py&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="sp">fan-out 9 · parity hotspot</span>' },
+    { t: 'p', html: '&nbsp;' },
+    { t: 'p', cls: 'c-d', html: 'work memory · 3 answers paid off → routing adjusted' },
+    { t: 'p', cls: 'c-d', html: 'lanes navigate by the map slice' },
+    { t: 'p', cls: 'c-ok', html: '✓ the codebase remembers what worked' }
+  ];
+  F.goChangelog = [
+    { t: 'type', x: 'cadre go "ship the weekly changelog"' },
+    { t: 'p', cls: 'c-d', html: 'fitting lanes .............. <span class="sp">3 of 6</span>', d: 420 },
+    { t: 'p', cls: 'c-a', html: 'planner&nbsp;&nbsp;&nbsp;glm-5.3&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; brief accepted' },
+    { t: 'p', cls: 'c-b', html: 'builder&nbsp;&nbsp;&nbsp;grok-desktop&nbsp;&nbsp;&nbsp;&nbsp; drafting from git log' },
+    { t: 'p', cls: 'c-g', html: 'verifier&nbsp;&nbsp;python-local&nbsp;&nbsp;&nbsp;&nbsp; linting links', d: 220 },
+    { t: 'p', html: '&nbsp;' },
+    { t: 'grow', cls: 'c-bt', html: '▸ collect&nbsp;&nbsp;&nbsp;&nbsp;<span class="bar">█</span>&nbsp;&nbsp;scanning 61 commits', fill: 12, tick: 45, done: '▸ collect&nbsp;&nbsp;&nbsp;&nbsp;████████████&nbsp;&nbsp;done&nbsp;&nbsp;<span class="sp">61 commits · 9 authors</span>' },
+    { t: 'grow', cls: 'c-bt', html: '▸ draft&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="bar">█</span>&nbsp;&nbsp;grouping by theme', fill: 12, tick: 55, done: '▸ draft&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;████████████&nbsp;&nbsp;done&nbsp;&nbsp;<span class="sp">7 sections</span>' },
+    { t: 'grow', cls: 'c-bt', html: '▸ verify&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="bar">█</span>&nbsp;&nbsp;checking 23 links', fill: 12, tick: 45, done: '▸ verify&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;████████████&nbsp;&nbsp;done&nbsp;&nbsp;<span class="sp">23/23 links resolve</span>' },
+    { t: 'p', html: '&nbsp;' },
+    { t: 'p', cls: 'c-ok', html: '✓ gate passed — first try', d: 400 },
+    { t: 'p', cls: 'c-bt', html: '&nbsp;&nbsp;CHANGELOG.md updated · rendered preview attached' },
+    { t: 'p', cls: 'c-d', html: '&nbsp;&nbsp;proof filed → ~/.cadre/runs/0152/' }
+  ];
+  F.lanes = [
+    { t: 'type', x: 'cadre lanes' },
+    { t: 'p', cls: 'c-d', html: 'LANE&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; KIND&nbsp;&nbsp;&nbsp;&nbsp;STATUS&nbsp;&nbsp;&nbsp;GOOD AT&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;COST', d: 300 },
+    { t: 'p', cls: 'c-a', html: 'glm-5.3&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;cli&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ready&nbsp;&nbsp;&nbsp;&nbsp;planning, prose&nbsp;&nbsp;&nbsp;&nbsp;<span class="sp">plan</span>' },
+    { t: 'p', cls: 'c-b', html: 'claude-code&nbsp;&nbsp;&nbsp;&nbsp;cli&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;busy →&nbsp;&nbsp;&nbsp;refactor, tests&nbsp;&nbsp;&nbsp;&nbsp;<span class="sp">per-use</span>' },
+    { t: 'p', cls: 'c-r', html: 'gpt-5.2&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;api&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ready&nbsp;&nbsp;&nbsp;&nbsp;critique, specs&nbsp;&nbsp;&nbsp;&nbsp;<span class="sp">metered</span>' },
+    { t: 'p', cls: 'c-g', html: 'python-local&nbsp;&nbsp;&nbsp;tool&nbsp;&nbsp;&nbsp;&nbsp;ready&nbsp;&nbsp;&nbsp;&nbsp;run, verify&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="sp">free</span>' },
+    { t: 'p', cls: 'c-b', html: 'grok-desktop&nbsp;&nbsp;&nbsp;app&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ready&nbsp;&nbsp;&nbsp;&nbsp;research, hot tabs&nbsp;<span class="sp">metered</span>' },
+    { t: 'p', cls: 'c-bt', html: 'maya*&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;human&nbsp;&nbsp;&nbsp;online&nbsp;&nbsp;reviews, taste&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="sp">coffee</span>' },
+    { t: 'p', html: '&nbsp;' },
+    { t: 'p', cls: 'c-d', html: '6 lanes · 4 ready · updated 2s ago' },
+    { t: 'p', cls: 'c-d', html: '* yes, humans are lanes. budgets and quiet hours apply.' }
+  ];
+  F.debate = [
+    { t: 'type', x: 'cadre debate "rewrite auth this week or next?"' },
+    { t: 'p', cls: 'c-d', html: 'motion&nbsp;&nbsp;&nbsp;ship the rewrite this week', d: 380 },
+    { t: 'p', cls: 'c-a', html: 'for&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;gpt-5.2&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <span class="sp">against&nbsp;&nbsp;glm-5.3</span>' },
+    { t: 'p', html: '&nbsp;' },
+    { t: 'p', cls: 'c-d', html: '── opening ─────────────────────────' },
+    { t: 'p', cls: 'c-a', html: 'for&nbsp;&nbsp;&nbsp;&nbsp;:&nbsp;&nbsp;migration is 90% done; momentum compounds' },
+    { t: 'p', cls: 'c-r', html: 'against:&nbsp;&nbsp;the last 10% is session invalidation — the riskiest part', d: 700 },
+    { t: 'p', cls: 'c-a', html: 'for&nbsp;&nbsp;&nbsp;&nbsp;:&nbsp;&nbsp;cite: incident #412 — stale sessions already bit us' },
+    { t: 'p', cls: 'c-r', html: 'against:&nbsp;&nbsp;same log — that fix shipped in a day; the pattern is known', d: 700 },
+    { t: 'p', html: '&nbsp;' },
+    { t: 'p', cls: 'c-d', html: '── cross-check ─────────────────────' },
+    { t: 'p', cls: 'c-g', html: '✓ both citations verified in ~/.cadre/audit/incidents.log' },
+    { t: 'p', html: '&nbsp;' },
+    { t: 'p', cls: 'c-d', html: '── verdict ─────────────────────────' },
+    { t: 'p', cls: 'c-bt', html: 'ship friday, feature-flagged · confidence 0.78' },
+    { t: 'p', cls: 'c-d', html: 'both sides filed → runs/0149/debate.md' }
+  ];
+  F.watch = [
+    { t: 'type', x: 'cadre watch 0152' },
+    { t: 'p', cls: 'c-d', html: 'run 0152 · ship the weekly changelog · 3 lanes', d: 320 },
+    { t: 'p', cls: 'c-g', html: '▸ collect&nbsp;&nbsp;&nbsp;████████████&nbsp;&nbsp;done&nbsp;&nbsp;<span class="sp">61 commits</span>' },
+    { t: 'p', cls: 'c-g', html: '▸ draft&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;████████████&nbsp;&nbsp;done&nbsp;&nbsp;<span class="sp">7 sections</span>' },
+    { t: 'grow', cls: 'c-bt', html: '▸ verify&nbsp;&nbsp;&nbsp;&nbsp;<span class="bar">█</span>&nbsp;&nbsp;checking links…', fill: 8, tick: 80, done: '▸ verify&nbsp;&nbsp;&nbsp;&nbsp;████████████&nbsp;&nbsp;done&nbsp;&nbsp;<span class="sp">23/23 links resolve</span>' },
+    { t: 'grow', cls: 'c-bt', html: '▸ gate&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="bar">█</span>&nbsp;&nbsp;collecting evidence…', fill: 6, tick: 90, done: '▸ gate&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;████████████&nbsp;&nbsp;<span class="c-ok">✓ passed</span>' },
+    { t: 'p', html: '&nbsp;' },
+    { t: 'p', cls: 'c-d', html: 'metered 0 of 200000 · elapsed 1m 04s' },
+    { t: 'p', cls: 'c-d', html: 'detached · the run keeps going without you' }
+  ];
+  F.proof = [
+    { t: 'type', x: 'cadre proof 0148' },
+    { t: 'p', cls: 'c-d', html: 'RUN 0148 · gate: <span class="c-ok">PASSED</span> · 2 revisions', d: 320 },
+    { t: 'p', html: '&nbsp;' },
+    { t: 'p', cls: 'c-d', html: 'EVIDENCE' },
+    { t: 'p', cls: 'c-bt', html: '&nbsp;&nbsp;commands&nbsp;&nbsp;14&nbsp;&nbsp;<span class="sp">transcript: run.log</span>' },
+    { t: 'p', cls: 'c-bt', html: '&nbsp;&nbsp;diffs&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;3&nbsp;&nbsp;&nbsp;<span class="sp">checkout.py · test_checkout.py · retry.py</span>' },
+    { t: 'p', cls: 'c-bt', html: '&nbsp;&nbsp;artifacts&nbsp;&nbsp;1&nbsp;&nbsp;&nbsp;<span class="sp">checkout.py</span>' },
+    { t: 'p', cls: 'c-bt', html: '&nbsp;&nbsp;citations&nbsp;&nbsp;2&nbsp;&nbsp;&nbsp;<span class="sp">runs/0148/run.log#critique</span>' },
+    { t: 'p', html: '&nbsp;' },
+    { t: 'p', cls: 'c-d', html: 'SAMPLE DIFF · checkout.py' },
+    { t: 'p', cls: 'c-e', html: '&nbsp;&nbsp;-&nbsp;&nbsp;time.sleep(3)' },
+    { t: 'p', cls: 'c-e', html: '&nbsp;&nbsp;-&nbsp;&nbsp;retry()' },
+    { t: 'p', cls: 'c-g', html: '&nbsp;&nbsp;+&nbsp;&nbsp;retry(backoff="expo", jitter=True)&nbsp;&nbsp;<span class="sp"># spec §2</span>' },
+    { t: 'p', html: '&nbsp;' },
+    { t: 'p', cls: 'c-d', html: 'VERDICT' },
+    { t: 'p', cls: 'c-bt', html: '&nbsp;&nbsp;critic findings resolved · suite green (24/24)' },
+    { t: 'p', cls: 'c-d', html: '&nbsp;&nbsp;replay: cadre watch 0148 --replay' }
+  ];
+  F.help = [
+    { t: 'type', x: 'help' },
+    { t: 'p', cls: 'c-d', html: 'cadre — the model-agnostic harness', d: 200 },
+    { t: 'p', cls: 'c-bt', html: '&nbsp;&nbsp;cadre go "outcome"&nbsp;&nbsp;&nbsp;&nbsp;the one command — assembles & runs the crew' },
+    { t: 'p', cls: 'c-bt', html: '&nbsp;&nbsp;cadre parity "match X"&nbsp;&nbsp;build to parity, unattended, cited' },
+    { t: 'p', cls: 'c-bt', html: '&nbsp;&nbsp;cadre plan "task"&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;the spend planner — bench before you build' },
+    { t: 'p', cls: 'c-bt', html: '&nbsp;&nbsp;cadre meter&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;windows, quotas, rollover, resets' },
+    { t: 'p', cls: 'c-bt', html: '&nbsp;&nbsp;cadre map&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;the living codebase graph' },
+    { t: 'p', cls: 'c-bt', html: '&nbsp;&nbsp;cadre sweep&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;resume or retire the leftovers' },
+    { t: 'p', cls: 'c-bt', html: '&nbsp;&nbsp;cadre lanes&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;who&apos;s here, what they cost' },
+    { t: 'p', cls: 'c-bt', html: '&nbsp;&nbsp;cadre debate "q"&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;two lanes argue, citations checked' },
+    { t: 'p', cls: 'c-bt', html: '&nbsp;&nbsp;cadre watch [run]&nbsp;&nbsp;&nbsp;&nbsp;attach to a live run' },
+    { t: 'p', cls: 'c-bt', html: '&nbsp;&nbsp;cadre proof [run]&nbsp;&nbsp;&nbsp;&nbsp;the evidence bundle' },
+    { t: 'p', cls: 'c-bt', html: '&nbsp;&nbsp;cadre pin&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;optional: pin roles, cap spend' },
+    { t: 'p', cls: 'c-bt', html: '&nbsp;&nbsp;cadre mcp&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;run it inside your editor\'s chat' },
+    { t: 'p', cls: 'c-d', html: '&nbsp;&nbsp;Ctrl-C files the run as interrupted · state stays in ~/.cadre' }
+  ];
+  F.parity = [
+    { t: 'type', x: 'cadre parity --until-proven --ref SPEC.md "match the spec"' },
+    { t: 'p', cls: 'c-d', html: 'locking named checks ...... <span class="sp">2 checks</span>', d: 500 },
+    { t: 'p', cls: 'c-d', html: '&nbsp;&nbsp;2 named checks · prose left unbuilt', d: 200 },
+    { t: 'p', cls: 'c-d', html: 'bench .......................... <span class="sp">6 lanes ranked</span>', d: 420 },
+    { t: 'p', cls: 'c-b', html: '&nbsp;&nbsp;scaffold → ollama-local&nbsp;&nbsp;<span class="sp">free · deterministic</span>' },
+    { t: 'p', cls: 'c-r', html: '&nbsp;&nbsp;edges&nbsp;&nbsp;&nbsp;&nbsp;→ gpt-5.2&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="sp">metered · judgment</span>' },
+    { t: 'p', cls: 'c-a', html: '&nbsp;&nbsp;review&nbsp;&nbsp;&nbsp;→ glm-5.3&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="sp">plan · reading</span>' },
+    { t: 'p', cls: 'c-g', html: '&nbsp;&nbsp;verify&nbsp;&nbsp;&nbsp;→ python-local&nbsp;&nbsp;&nbsp;&nbsp;<span class="sp">free · exact</span>', d: 260 },
+    { t: 'p', html: '&nbsp;' },
+    { t: 'grow', cls: 'c-bt', html: 'loop 1&nbsp;&nbsp;<span class="bar">█</span>&nbsp;&nbsp;verifying…', fill: 12, tick: 55, done: 'loop 1&nbsp;&nbsp;████████████&nbsp;&nbsp;1 closed · 1 open' },
+    { t: 'grow', cls: 'c-bt', html: 'loop 2&nbsp;&nbsp;<span class="bar">█</span>&nbsp;&nbsp;verifying…', fill: 12, tick: 65, done: 'loop 2&nbsp;&nbsp;████████████&nbsp;&nbsp;1 closed · 1 open' },
+    { t: 'grow', cls: 'c-g', html: 'loop 3&nbsp;&nbsp;<span class="bar">█</span>&nbsp;&nbsp;verifying…', fill: 12, tick: 55, done: 'loop 3&nbsp;&nbsp;████████████&nbsp;&nbsp;ALL BEHAVIORS CLOSED' },
+    { t: 'p', html: '&nbsp;' },
+    { t: 'p', cls: 'c-ok', html: '✓ ALL BEHAVIORS CLOSED — contract matches the build', d: 400 },
+    { t: 'p', cls: 'c-bt', html: '&nbsp;&nbsp;checks closed · citations in the ledger' },
+    { t: 'p', cls: 'c-d', html: '&nbsp;&nbsp;metered 0 of 200000 · 3 laps · stretch proposed' },
+    { t: 'p', cls: 'c-d', html: '&nbsp;&nbsp;stretch item(s) PROPOSED · built only if the goal says so' }
+  ];
+  F.plan = [
+    { t: 'type', x: 'cadre plan "port checkout to flutter"' },
+    { t: 'p', cls: 'c-d', html: 'bench .................. <span class="sp">6 lanes × 3 probe tasks</span>', d: 500 },
+    { t: 'p', cls: 'c-d', html: 'metric ................ <span class="sp">pass rate from gated runs</span>', d: 300 },
+    { t: 'p', cls: 'c-d', html: 'meters ................ <span class="sp">quota-aware</span>', d: 200 },
+    { t: 'p', html: '&nbsp;' },
+    { t: 'p', cls: 'c-d', html: 'ROUTING · cheapest path that passes the gate' },
+    { t: 'p', cls: 'c-b', html: 'scaffold&nbsp;&nbsp;&nbsp;&nbsp;ollama-local&nbsp;&nbsp;&nbsp;&nbsp;<span class="sp">free · local</span>' },
+    { t: 'p', cls: 'c-b', html: 'draft&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;claude-max&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="sp">included · 62% window left</span>' },
+    { t: 'p', cls: 'c-r', html: 'edge cases&nbsp;&nbsp;gpt-5.2&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="sp">rollover · judgment</span>' },
+    { t: 'p', cls: 'c-a', html: 'review&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;glm-5.3&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="sp">metered</span>' },
+    { t: 'p', cls: 'c-g', html: 'verify&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;python-local&nbsp;&nbsp;&nbsp;&nbsp;<span class="sp">free</span>', d: 260 },
+    { t: 'p', html: '&nbsp;' },
+    { t: 'p', cls: 'c-bt', html: 'token budget 200000 · covered lanes before metered' },
+    { t: 'p', cls: 'c-d', html: 'downshift rule · cheaper lane passes the same probes → it takes over' },
+    { t: 'p', cls: 'c-d', html: 'commit · cadre go "port checkout to flutter"' }
+  ];
+  F.meter = [
+    { t: 'type', x: 'cadre meter' },
+    { t: 'p', cls: 'c-d', html: 'METERS · <span class="sp">read 4s ago · 3 providers · 2 plans</span>', d: 380 },
+    { t: 'p', html: '&nbsp;' },
+    { t: 'p', cls: 'c-b', html: 'claude-max&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="sp">sub · 5h window</span>' },
+    { t: 'p', cls: 'c-g', html: '██████████░░&nbsp;&nbsp;62% left · resets 19:40' },
+    { t: 'p', cls: 'c-b', html: 'glm-annual&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="sp">sub · monthly quota</span>' },
+    { t: 'p', cls: 'c-g', html: '████████████&nbsp;&nbsp;81% left · resets Nov 1' },
+    { t: 'p', cls: 'c-b', html: 'gpt-api&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="sp">pay-go + rollover</span>' },
+    { t: 'p', cls: 'c-a', html: '███░░░░░░░░░&nbsp;&nbsp;23% of the declared quota left' },
+    { t: 'p', cls: 'c-b', html: 'ollama-local&nbsp;&nbsp;&nbsp;&nbsp;<span class="sp">owned · unlimited</span>' },
+    { t: 'p', cls: 'c-g', html: '████████████&nbsp;&nbsp;free · RAM is the meter' },
+    { t: 'p', html: '&nbsp;' },
+    { t: 'p', cls: 'c-d', html: 'pace&nbsp;&nbsp;1 run active · projected 78% of claude-max window' },
+    { t: 'p', cls: 'c-d', html: 'guard&nbsp;&nbsp;gpt-api rollover expires in 12 days — flagged to burn first' },
+    { t: 'p', cls: 'c-d', html: 'ledger · every meter event lands in runs/*.log' }
+  ];
+  F.sweep = [
+    { t: 'type', x: 'cadre sweep' },
+    { t: 'p', cls: 'c-d', html: 'found 4 leftovers · <span class="sp">runs/*.log + lock files</span>', d: 420 },
+    { t: 'p', cls: 'c-b', html: '0144&nbsp;&nbsp;interrupted&nbsp;&nbsp;<span class="sp">Ctrl-C · Tue 14:52</span>&nbsp;&nbsp;interrupted' },
+    { t: 'p', cls: 'c-y', html: '0097&nbsp;&nbsp;quota dry&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="sp">quota empty · Mon 09:14</span>&nbsp;&nbsp;paused' },
+    { t: 'p', cls: 'c-r', html: '0131&nbsp;&nbsp;timeout&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="sp">builder timed out · today 11:03' },
+    { t: 'p', cls: 'c-a', html: '0140&nbsp;&nbsp;plan changed&nbsp;<span class="sp">reference moved · re-lock queued' },
+    { t: 'p', html: '&nbsp;' },
+    { t: 'grow', cls: 'c-bt', html: '0097&nbsp;&nbsp;<span class="bar">█</span>&nbsp;&nbsp;window refilled · resuming', fill: 10, tick: 60, done: '0097&nbsp;&nbsp;████████████&nbsp;&nbsp;cadre go --resume 0097' },
+    { t: 'p', cls: 'c-d', html: '0140&nbsp;&nbsp;re-locked against v9 · 31 behaviors changed → queued as new run' },
+    { t: 'p', cls: 'c-d', html: '0144 + 0131 parked for quiet hours · budget held' },
+    { t: 'p', html: '&nbsp;' },
+    { t: 'p', cls: 'c-ok', html: '✓ nothing rotting · 1 resumed · 1 re-queued · 2 parked · 0 lost' }
+  ];
+  F.pin = [
+    { t: 'type', x: 'cadre pin' },
+    { t: 'p', cls: 'c-d', html: 'pins · optional guardrails', d: 380 },
+    { t: 'p', html: '&nbsp;' },
+    { t: 'p', cls: 'c-b', html: 'builder&nbsp;&nbsp;&nbsp;= claude-code&nbsp;&nbsp;&nbsp;&nbsp;<span class="sp">pinned by you</span>' },
+    { t: 'p', cls: 'c-a', html: 'planner&nbsp;&nbsp;&nbsp;= glm-5.3&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="sp">pinned by you</span>' },
+    { t: 'p', cls: 'c-r', html: 'critic&nbsp;&nbsp;&nbsp;&nbsp;= gpt-5.2&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="sp">pinned by you</span>' },
+    { t: 'p', html: '&nbsp;' },
+    { t: 'p', cls: 'c-d', html: 'budget cap&nbsp;&nbsp;200000 tokens&nbsp;&nbsp;&nbsp;<span class="sp">pins override routing</span>' },
+    { t: 'p', cls: 'c-d', html: 'quiet hours&nbsp;23:00–07:00 · --override spends anyway' },
+    { t: 'p', cls: 'c-d', html: 'note · unpinned roles stay meter- and bench-routed' },
+    { t: 'p', cls: 'c-d', html: 'set · cadre pin --role builder=sol · clear · cadre pin --clear' }
+  ];
+  F.mcp = [
+    { t: 'type', x: 'cadre mcp' },
+    { t: 'p', cls: 'c-d', html: 'serving stdio · <span class="sp">12 tools exposed to MCP clients</span>', d: 420 },
+    { t: 'p', cls: 'c-bt', html: 'cadre_go · cadre_parity · cadre_plan · cadre_meter' },
+    { t: 'p', cls: 'c-bt', html: 'cadre_sweep · cadre_lanes · cadre_watch · cadre_proof' },
+    { t: 'p', cls: 'c-bt', html: 'cadre_map · cadre_debate · cadre_pin · cadre_doctor', d: 240 },
+    { t: 'p', html: '&nbsp;' },
+    { t: 'p', cls: 'c-d', html: 'config → paste into your client:' },
+    { t: 'p', cls: 'c-a', html: '{ "mcpServers": { "cadre": {' },
+    { t: 'p', cls: 'c-a', html: '&nbsp;&nbsp;&nbsp;"command": "cadre", "args": ["mcp"] } } }', d: 300 },
+    { t: 'p', html: '&nbsp;' },
+    { t: 'p', cls: 'c-d', html: 'connected · cursor agent panel · claude desktop · vs code chat' },
+    { t: 'p', cls: 'c-ok', html: '✓ same gate · same ledger · new view' }
+  ];
+
+  /* ── hero terminal: autoplay + replay ────────────── */
+  var heroBody = document.querySelector('#hero-term .term-body');
+  var hero = makeTerm(heroBody);
+  var heroReplay = document.getElementById('hero-replay');
+  var heroPlayed = false;
+  async function runHero() {
+    heroReplay.disabled = true;
+    hero.clear();
+    var tk = hero.token();
+    await hero.typeCmd(F.go[0].x, true);
+    var rest = F.go.slice(1);
+    var ok = await hero.play(rest, tk);
+    if (ok) heroReplay.disabled = false;
+  }
+  if (REDUCED) { runHero(); }
+  else if ('IntersectionObserver' in window) {
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        if (e.isIntersecting && !heroPlayed) { heroPlayed = true; runHero(); io.disconnect(); }
+      });
+    }, { threshold: 0.35 });
+    io.observe(document.getElementById('hero-term'));
+  } else { runHero(); }
+  heroReplay.addEventListener('click', function () { if (!heroPlayed) heroPlayed = true; runHero(); });
+
+  /* ── scan terminal (section 2) ───────────────────── */
+  var scanScript = [
+    { t: 'p', cls: 'c-d', html: '$ cadre go --dry "fix the flaky test"', d: 500 },
+    { t: 'p', cls: 'c-d', html: 'scanning this machine ...', d: 600 },
+    { t: 'p', cls: 'c-a', html: '✓ glm-5.3&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;cli&nbsp;&nbsp;&nbsp; <span class="sp">→ planner</span>' },
+    { t: 'p', cls: 'c-b', html: '✓ claude-code&nbsp;&nbsp;&nbsp;&nbsp;cli&nbsp;&nbsp;&nbsp; <span class="sp">→ builder</span>' },
+    { t: 'p', cls: 'c-r', html: '✓ gpt-5.2&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;api&nbsp;&nbsp;&nbsp; <span class="sp">→ critic</span>' },
+    { t: 'p', cls: 'c-g', html: '✓ python-local&nbsp;&nbsp;&nbsp;tool&nbsp;&nbsp; <span class="sp">→ verifier</span>' },
+    { t: 'p', cls: 'c-d', html: '4 of 6 lanes fit · 2 idle · 0 config', d: 300 },
+    { t: 'p', cls: 'c-a', html: 'sweep · 1 leftover adopted · run 0144 resumes at step 3', d: 260 }
+  ];
+  var scanBody = document.querySelector('#scan-term .term-body');
+  var scan = makeTerm(scanBody);
+  var scanPlayed = false;
+  function runScan() {
+    scan.clear();
+    scan.play(scanScript, scan.token());
+    scanPlayed = true;
+  }
+  if (REDUCED) { runScan(); }
+  else if ('IntersectionObserver' in window) {
+    var io2 = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) { if (e.isIntersecting && !scanPlayed) { runScan(); io2.disconnect(); } });
+    }, { threshold: 0.4 });
+    io2.observe(document.getElementById('scan-term'));
+  } else { runScan(); }
+
+  /* ── parity terminal (section 2.5) ───────────────── */
+  var parityScript = [
+    { t: 'p', cls: 'c-d', html: '$ cadre parity --until-proven --ref SPEC.md', d: 500 },
+    { t: 'p', cls: 'c-d', html: 'locking named checks ..... <span class="sp">2 checks</span>', d: 600 },
+    { t: 'p', cls: 'c-d', html: '&nbsp;&nbsp;2 named checks · prose left unbuilt', d: 200 },
+    { t: 'p', cls: 'c-d', html: 'bench ................ <span class="sp">6 lanes, fit, then cost</span>', d: 500 },
+    { t: 'p', cls: 'c-b', html: 'scaffold → ollama-local&nbsp;&nbsp;free' },
+    { t: 'p', cls: 'c-r', html: 'edges&nbsp;&nbsp;&nbsp;&nbsp;→ frontier&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;metered' },
+    { t: 'p', cls: 'c-a', html: 'review&nbsp;&nbsp;&nbsp;→ plan-lane&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;plan' },
+    { t: 'p', cls: 'c-g', html: 'verify&nbsp;&nbsp;&nbsp;→ python-local&nbsp;&nbsp;free', d: 300 },
+    { t: 'p', html: '&nbsp;' },
+    { t: 'grow', cls: 'c-bt', html: 'loop 1&nbsp;&nbsp;<span class="bar">█</span>', fill: 14, tick: 55, done: 'loop 1&nbsp;&nbsp;████████████&nbsp;&nbsp;1 closed · 1 open' },
+    { t: 'grow', cls: 'c-bt', html: 'loop 2&nbsp;&nbsp;<span class="bar">█</span>', fill: 14, tick: 65, done: 'loop 2&nbsp;&nbsp;████████████&nbsp;&nbsp;1 closed · 1 open' },
+    { t: 'grow', cls: 'c-g', html: 'loop 3&nbsp;&nbsp;<span class="bar">█</span>', fill: 14, tick: 55, done: 'loop 3&nbsp;&nbsp;████████████&nbsp;&nbsp;ALL BEHAVIORS CLOSED' },
+    { t: 'p', cls: 'c-ok', html: '✓ ALL BEHAVIORS CLOSED — contract matches the build' },
+    { t: 'p', cls: 'c-d', html: 'metered 0 of 200000 · 3 laps · unattended' }
+  ];
+  var parityBody = document.querySelector('#parity-term .term-body');
+  var parityT = makeTerm(parityBody);
+  var parityPlayed = false;
+  function runParityTerm() {
+    parityT.clear();
+    parityT.play(parityScript, parityT.token());
+    parityPlayed = true;
+  }
+  if (REDUCED) { runParityTerm(); }
+  else if ('IntersectionObserver' in window) {
+    var io3 = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) { if (e.isIntersecting && !parityPlayed) { runParityTerm(); io3.disconnect(); } });
+    }, { threshold: 0.4 });
+    io3.observe(document.getElementById('parity-term'));
+  } else { runParityTerm(); }
+
+  /* ── meter terminal (section 2.7) ────────────────── */
+  var meterScript = [
+    { t: 'p', cls: 'c-d', html: '$ cadre meter', d: 450 },
+    { t: 'p', cls: 'c-d', html: 'METERS · <span class="sp">3 providers · 2 plans</span>', d: 420 },
+    { t: 'p', cls: 'c-b', html: 'claude-max&nbsp;&nbsp;<span class="sp">sub · 5h window</span>' },
+    { t: 'p', cls: 'c-g', html: '██████████░░&nbsp;&nbsp;62% left · resets 19:40', d: 300 },
+    { t: 'p', cls: 'c-b', html: 'glm-annual&nbsp;&nbsp;&nbsp;<span class="sp">sub · monthly quota</span>' },
+    { t: 'p', cls: 'c-g', html: '████████████&nbsp;&nbsp;81% left · resets Nov 1', d: 300 },
+    { t: 'p', cls: 'c-b', html: 'gpt-api&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="sp">pay-go + rollover</span>' },
+    { t: 'p', cls: 'c-a', html: '███░░░░░░░░░&nbsp;&nbsp;23% of the declared quota left', d: 300 },
+    { t: 'p', cls: 'c-b', html: 'ollama-local&nbsp;&nbsp;<span class="sp">owned · unlimited</span>' },
+    { t: 'p', cls: 'c-g', html: '████████████&nbsp;&nbsp;free · RAM is the meter', d: 300 },
+    { t: 'p', html: '&nbsp;' },
+    { t: 'p', cls: 'c-d', html: 'guard · gpt-api rollover expires in 12 days — burn first' },
+    { t: 'p', cls: 'c-d', html: 'ledger · every meter event lands in runs/*.log' }
+  ];
+  var meterBody = document.querySelector('#meter-term .term-body');
+  var meterT = makeTerm(meterBody);
+  var meterPlayed = false;
+  function runMeterTerm() {
+    meterT.clear();
+    meterT.play(meterScript, meterT.token());
+    meterPlayed = true;
+  }
+  if (REDUCED) { runMeterTerm(); }
+  else if ('IntersectionObserver' in window) {
+    var io4 = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) { if (e.isIntersecting && !meterPlayed) { runMeterTerm(); io4.disconnect(); } });
+    }, { threshold: 0.4 });
+    io4.observe(document.getElementById('meter-term'));
+  } else { runMeterTerm(); }
+
+  /* ── discipline terminal (section 2.9) ───────────── */
+  var disciplineScript = [
+    { t: 'p', cls: 'c-d', html: '$ cadre go "fix the login 500" --scope lock', d: 450 },
+    { t: 'p', cls: 'c-d', html: 'scope lock · <span class="sp">auth/*.py · done = suite green</span>', d: 420 },
+    { t: 'p', cls: 'c-bt', html: 'map · slice for the locked files · not the whole repo' },
+    { t: 'p', cls: 'c-bt', html: 'pipes · output compressed · diffs over dumps' },
+    { t: 'p', cls: 'c-bt', html: 'patch · auth/handler.py · +12 −9 · confined', d: 260 },
+    { t: 'p', html: '&nbsp;' },
+    { t: 'p', cls: 'c-e', html: '✗ creep caught · utils/dates.py outside the lock', d: 500 },
+    { t: 'p', cls: 'c-r', html: '&nbsp;&nbsp;critic · "nice-to-have timezone guard — not in the ask"' },
+    { t: 'p', cls: 'c-b', html: '→ reverted · second pass stays inside auth/', d: 700 },
+    { t: 'p', html: '&nbsp;' },
+    { t: 'p', cls: 'c-g', html: '✓ gate: PROVEN · metered 0 of 200000 · stopped' }
+  ];
+  var disciplineBody = document.querySelector('#discipline-term .term-body');
+  var disciplineT = makeTerm(disciplineBody);
+  var disciplinePlayed = false;
+  function runDisciplineTerm() {
+    disciplineT.clear();
+    disciplineT.play(disciplineScript, disciplineT.token());
+    disciplinePlayed = true;
+  }
+  if (REDUCED) { runDisciplineTerm(); }
+  else if ('IntersectionObserver' in window) {
+    var io7 = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) { if (e.isIntersecting && !disciplinePlayed) { runDisciplineTerm(); io7.disconnect(); } });
+    }, { threshold: 0.4 });
+    io7.observe(document.getElementById('discipline-term'));
+  } else { runDisciplineTerm(); }
+
+  /* ── playground ──────────────────────────────────── */
+  var pgBody = document.getElementById('pg-body');
+  var pgInput = document.getElementById('pg-input');
+  var pgInputLine = document.getElementById('pg-input-line');
+  var pg = makeTerm(pgBody);
+  var busy = false;
+  var history = [];
+  var hIdx = -1;
+
+  function inputLineEl() { return pgInputLine; }
+  function setBusy(b) {
+    busy = b;
+    pgInput.disabled = b;
+    document.querySelectorAll('.chip').forEach(function (c) { c.disabled = b; });
+    if (!b) return;
+    var onEsc = function (e) {
+      if (e.key !== 'Escape' || !busy) return;
+      pg.cancel();
+      busy = false;
+      pgInput.disabled = false;
+      document.querySelectorAll('.chip').forEach(function (c) { c.disabled = false; });
+      var d = pg.line('c-e', '');
+      d.textContent = 'playground stopped';
+      document.removeEventListener('keydown', onEsc);
+    };
+    document.addEventListener('keydown', onEsc);
+  }
+  async function runNamed(raw, typed) {
+    if (busy) return;
+    var cmd = raw.trim();
+    if (!cmd) return;
+    history.unshift(cmd); hIdx = -1;
+    setBusy(true);
+    pg.clear();                    /* clears, so re-append input line later */
+    var lineEl = inputLineEl();
+    await pg.typeCmd(cmd, false);
+    var flow = null;
+    var c = cmd.replace(/^cadre\s+/, '').toLowerCase();
+    if (c === 'go' || c.indexOf('go ') === 0) flow = /changelog|release|notes|weekly/.test(cmd) ? F.goChangelog : (/scope|login/.test(cmd) ? F.goScoped : F.go);
+    else if (c === 'lanes' || c.indexOf('lanes') === 0) flow = F.lanes;
+    else if (c.indexOf('debate') === 0) flow = F.debate;
+    else if (c.indexOf('watch') === 0) flow = F.watch;
+    else if (c.indexOf('proof') === 0) flow = F.proof;
+    else if (c.indexOf('parity') === 0) flow = F.parity;
+    else if (c.indexOf('plan') === 0) flow = F.plan;
+    else if (c.indexOf('meter') === 0) flow = F.meter;
+    else if (c.indexOf('sweep') === 0) flow = F.sweep;
+    else if (c.indexOf('pin') === 0) flow = F.pin;
+    else if (c.indexOf('mcp') === 0) flow = F.mcp;
+    else if (c.indexOf('map') === 0) flow = F.map;
+    else if (c === 'help' || c === 'cadre' || c === '') flow = F.help;
+    if (!flow) {
+      var d = pg.line('c-e', '');
+      d.textContent = 'unknown: ' + cmd + ' — try help';
+      flow = F.help.slice(1);
+      await pg.play(flow, pg.token());
+    } else {
+      await pg.play(flow.slice(1), pg.token());
+    }
+    pgBody.appendChild(lineEl);
+    setBusy(false);
+    pgInput.focus({ preventScroll: true });
+  }
+  pgInput.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') {
+      var v = pgInput.value;
+      pgInput.value = '';
+      runNamed(v);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (history.length) { hIdx = Math.min(hIdx + 1, history.length - 1); pgInput.value = history[hIdx]; }
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (hIdx > 0) { hIdx--; pgInput.value = history[hIdx]; }
+      else { hIdx = -1; pgInput.value = ''; }
+    }
+  });
+  document.querySelectorAll('.chip').forEach(function (chip) {
+    chip.addEventListener('click', function () {
+      var cmd = chip.getAttribute('data-cmd');
+      runNamed(cmd);
+    });
+  });
+  document.getElementById('pg-term').addEventListener('click', function (e) {
+    if (!busy && window.getSelection().toString() === '') pgInput.focus({ preventScroll: true });
+  });
+
+  /* ── sweep terminal (section 5.5) ────────────────── */
+  var sweepScript = [
+    { t: 'p', cls: 'c-d', html: '$ cadre sweep', d: 450 },
+    { t: 'p', cls: 'c-d', html: 'found 4 leftovers · <span class="sp">runs/*.log + lock files</span>', d: 420 },
+    { t: 'p', cls: 'c-b', html: '0131&nbsp;&nbsp;timeout&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="sp">builder timed out · today 11:03' },
+    { t: 'p', cls: 'c-y', html: '0097&nbsp;&nbsp;quota dry&nbsp;&nbsp;&nbsp;<span class="sp">71% done · window refilled 19:40</span>' },
+    { t: 'p', cls: 'c-a', html: '0140&nbsp;&nbsp;plan changed&nbsp;&nbsp;<span class="sp">ref moved → ios-app#v9</span>' },
+    { t: 'p', cls: 'c-b', html: '0144&nbsp;&nbsp;interrupted&nbsp;&nbsp;<span class="sp">Ctrl-C · filed</span>' },
+    { t: 'p', html: '&nbsp;' },
+    { t: 'grow', cls: 'c-bt', html: '0097&nbsp;&nbsp;<span class="bar">█</span>&nbsp;&nbsp;resuming from checkpoint', fill: 10, tick: 60, done: '0097&nbsp;&nbsp;████████████&nbsp;&nbsp;cadre go --resume 0097' },
+    { t: 'p', cls: 'c-d', html: '0140 re-locked against v9 → queued as new run' },
+    { t: 'p', cls: 'c-ok', html: '✓ nothing rotting · 0 lost' }
+  ];
+  var sweepBody = document.querySelector('#sweep-term .term-body');
+  var sweepT = makeTerm(sweepBody);
+  var sweepPlayed = false;
+  function runSweepTerm() {
+    sweepT.clear();
+    sweepT.play(sweepScript, sweepT.token());
+    sweepPlayed = true;
+  }
+  if (REDUCED) { runSweepTerm(); }
+  else if ('IntersectionObserver' in window) {
+    var io5 = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) { if (e.isIntersecting && !sweepPlayed) { runSweepTerm(); io5.disconnect(); } });
+    }, { threshold: 0.4 });
+    io5.observe(document.getElementById('sweep-term'));
+  } else { runSweepTerm(); }
+
+  /* ── chat surface reveal ────────────────────────── */
+  var chatCard = document.getElementById('chat-card');
+  if (chatCard) {
+    var revealChat = function () { chatCard.classList.add('reveal'); };
+    if (REDUCED) { revealChat(); }
+    else if ('IntersectionObserver' in window) {
+      var io6 = new IntersectionObserver(function (entries) {
+        entries.forEach(function (e) { if (e.isIntersecting) { revealChat(); io6.disconnect(); } });
+      }, { threshold: 0.35 });
+      io6.observe(chatCard);
+    } else { revealChat(); }
+  }
+
+})();
+</script>
+</body>
+</html>

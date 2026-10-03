@@ -1,15 +1,11 @@
-// behaviorcheck - the parity contract's closing executor. For each behavior in
-// a reference contract, derive a DETERMINISTIC check against the current tree:
-//   1. file check     - the behavior names a path (docs/X.md, src/x.js): it exists
-//   2. test check     - the behavior mentions tests: the project's test command exits 0
-//   3. keyword check  - the behavior's distinctive keywords co-occur in a source line
-// A behavior closes ONLY when its check passes, and the closing row carries a
-// citation (file:line) a human can open. No LLM judgment in the loop - the
-// reference's own words decide, greppably.
+// behaviorcheck - the parity contract's closing executor. A behavior closes only
+// when the line names a check and that check exits 0 (or the file contains the
+// named text, or the named path exists). Prose does not close. The citation is
+// the check that passed.
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { join, extname } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 const run = promisify(execFile);
 
@@ -48,123 +44,117 @@ export function mentionedPaths(text) {
   return [...new Set(out)];
 }
 
-const TEXT_EXTS = new Set(['.js', '.mjs', '.cjs', '.ts', '.py', '.sh', '.json', '.yaml', '.yml', '.toml', '.md', '.txt']);
+const UNCHECKABLE = 'no check named (command, file contains, test name, or path exists)';
 
-function walkFiles(cwd, limit = 3000) {
-  const out = [];
-  const skip = new Set(['node_modules', '.git', '.cadre', 'dist', 'build', 'coverage', '.aimee', 'frugal-backups']);
-  const rec = (d) => {
-    if (out.length >= limit) return;
-    let entries;
-    try { entries = readdirSync(d); } catch { return; }
-    for (const e of entries) {
-      if (skip.has(e)) continue;
-      const p = join(d, e);
-      let st;
-      try { st = statSync(p); } catch { continue; }
-      if (st.isDirectory()) rec(p);
-      else if (TEXT_EXTS.has(extname(e))) out.push(p);
-      if (out.length >= limit) return;
+function stripQuotes(s) {
+  return String(s || '').trim().replace(/^["']|["']$/g, '');
+}
+
+// A line closes only when it names a check. Prose, a mentioned path, and an
+// issue number do not.
+export function parseCheck(behavior) {
+  const line = String(behavior || '').trim();
+  let m;
+  if ((m = /^command:\s*(.+)$/i.exec(line))) return { kind: 'command', command: m[1].trim() };
+  if ((m = /^`([^`]+)`$/.exec(line))) return { kind: 'command', command: m[1].trim() };
+  if ((m = /^(?:create|write|provide)\s+([\w./-]+\.[A-Za-z0-9]+)\s+containing\s+(.+)$/i.exec(line))) {
+    return { kind: 'contains', path: m[1], text: stripQuotes(m[2]) };
+  }
+  if ((m = /^([\w./-]+\.[A-Za-z0-9]+)\s+contains\s+(.+)$/i.exec(line))) {
+    return { kind: 'contains', path: m[1], text: stripQuotes(m[2]) };
+  }
+  if ((m = /^([\w./-]+\.[A-Za-z0-9]+)\s+exists$/i.exec(line))) return { kind: 'file', path: m[1] };
+  if ((m = /^test:\s*(.+)$/i.exec(line))) return { kind: 'test', name: m[1].trim() };
+  if ((m = /^test\s+(.+?)\s+passes$/i.exec(line))) return { kind: 'test', name: m[1].trim() };
+  if (/^(?:npm test|tests?)\s+(?:pass(?:es)?|exits?\s+0)$/i.test(line)) return { kind: 'test', name: null };
+  return null;
+}
+
+// Headings choose the bucket. Non-goals stay out even when the goal asks for stretch.
+export function splitSpec(text) {
+  const core = [];
+  const stretch = [];
+  const excluded = [];
+  let mode = 'core';
+  for (const raw of String(text || '').split('\n')) {
+    const l = raw.trim();
+    if (/^#{1,4}\s+/.test(l)) {
+      const h = l.replace(/^#{1,4}\s+/, '');
+      if (/non-goal|out of scope/i.test(h)) mode = 'excluded';
+      else if (/stretch|future|nice-to-have|\blater\b/i.test(h)) mode = 'stretch';
+      else mode = 'core';
+      continue;
     }
-  };
-  rec(cwd);
-  return out;
+    if (/^[-*=#]{3,}$/.test(l) || l.length <= 8) continue;
+    const clean = l.replace(/^[-*]\s+/, '');
+    if (!clean || !/^\S/.test(clean)) continue;
+    (mode === 'stretch' ? stretch : mode === 'excluded' ? excluded : core).push(clean);
+  }
+  return { core: core.slice(0, 40), stretch: stretch.slice(0, 15), excluded };
+}
+
+export function wantsBeyond(goal) {
+  return /\bbeyond parity\b|\bstretch\b|\bgo further\b/i.test(String(goal || ''));
 }
 
 // Run ONE behavior's check against the tree. Returns:
 //   { closed, kind, citation?, reason }
-export function runBehaviorCheck(behavior, cwd, opts = {}) {
-  const { refPath = null } = opts;
-  const text = String(behavior || '');
-
-  // 1. file check: every path the behavior names exists
-  const paths = mentionedPaths(text);
-  if (paths.length) {
-    const missing = paths.filter((p) => !existsSync(join(cwd, p)));
-    if (missing.length === 0) {
-      return { closed: true, kind: 'file', citation: paths[0], reason: `named path(s) present: ${paths.join(', ')}` };
-    }
-    return { closed: false, kind: 'file', reason: `missing named path(s): ${missing.join(', ')}` };
+export function runBehaviorCheck(behavior, cwd) {
+  const parsed = parseCheck(behavior);
+  if (!parsed) return { closed: false, kind: 'uncheckable', reason: UNCHECKABLE };
+  if (parsed.kind === 'command') {
+    return { closed: null, kind: 'command', command: parsed.command, reason: 'check deferred' };
   }
-
-  // 1b. issue check: the behavior cites an issue number - the issue must EXIST
-  // (gh CLI when present, offline files otherwise). Closing cites the issue.
-  const issues = mentionedIssues(text);
-  if (issues.length && opts.ghRepo) {
-    return { closed: null, kind: 'issue', reason: `issue check deferred: ${issues.join(', ')}` };
+  if (parsed.kind === 'test') {
+    return { closed: null, kind: 'test', name: parsed.name, reason: 'check deferred' };
   }
-  if (issues.length && !opts.ghRepo) {
-    // citing an issue with no resolvable repo is an honest OPEN, not a keyword miss
-    return { closed: false, kind: 'issue', reason: `cites issue(s) ${issues.join(', ')} but no repo to query (no git origin remote; pass --gh-repo)` };
+  if (parsed.kind === 'file') {
+    return existsSync(join(cwd, parsed.path))
+      ? { closed: true, kind: 'file', citation: parsed.path, reason: `path exists: ${parsed.path}` }
+      : { closed: false, kind: 'file', reason: `missing named path: ${parsed.path}` };
   }
-
-  // 2. test check: the behavior mentions tests -> the project's tests must pass
-  if (/\btests?\b|\btest command\b|\bnpm test\b/i.test(text) && testCmd) {
-    // handled by the async wrapper (needs to exec); signal the kind here
-    return { closed: null, kind: 'test', reason: 'test check deferred' };
-  }
-
-  // 3. keyword check: distinctive keywords co-occur in a source line.
-  // CIRCULARITY GUARD: the reference document itself is excluded - a keyword
-  // hit inside the spec proves nothing about the implementation.
-  // RARITY WEIGHTING: implementation keywords (identifiers, paths, flags)
-  // carry the check; prose words alone never close a behavior.
-  const kws = keywords(text);
-  if (kws.length < 2) return { closed: false, kind: 'keyword', reason: 'behavior too generic to check deterministically (no distinctive keywords)' };
-  let files = walkFiles(cwd);
-  if (refPath) {
-    const absRef = refPath.startsWith('/') ? refPath : join(cwd, refPath);
-    files = files.filter((f) => f !== absRef);
-  }
-  // IDF-style rarity: pass 1 counts in how many files each keyword occurs.
-  // A keyword found in <=2 files is RARE - one hit on a line is real evidence.
-  // A keyword everywhere (test, export, function) proves nothing alone.
-  const fileCount = new Map(kws.map((k) => [k, 0]));
-  const fileTexts = [];
-  for (const f of files) {
-    let t;
-    try { t = readFileSync(f, 'utf-8').toLowerCase(); } catch { continue; }
-    fileTexts.push([f, t]);
-    for (const k of kws) if (t.includes(k)) fileCount.set(k, fileCount.get(k) + 1);
-  }
-  const rare = (k) => fileCount.get(k) <= 2 && k.length >= 5;
-  for (const [f, t] of fileTexts) {
-    const lines = t.split('\n');
-    for (let i = 0; i < lines.length; i++) {
-      const low = lines[i];
-      const hits = kws.filter((k) => low.includes(k));
-      if (hits.length === 0) continue;
-      const rareHits = hits.filter(rare);
-      const ok = rareHits.length >= 1 && hits.length >= Math.max(2, Math.ceil(kws.length * 0.5))
-        ? true
-        : hits.length >= Math.ceil(kws.length * 0.75);
-      if (ok) {
-        const rel = f.startsWith(cwd) ? f.slice(cwd.length + 1) : f;
-        return { closed: true, kind: 'keyword', citation: `${rel}:${i + 1}`, reason: `keywords co-occur: ${hits.join(', ')}${rareHits.length ? ' (rare: ' + rareHits.join(', ') + ')' : ''}` };
-      }
-    }
-  }
-  return { closed: false, kind: 'keyword', reason: `no line co-locates [${kws.join(', ')}]` };
+  const full = join(cwd, parsed.path);
+  if (!existsSync(full)) return { closed: false, kind: 'contains', reason: `missing file ${parsed.path}` };
+  let body = '';
+  try { body = readFileSync(full, 'utf-8'); } catch { return { closed: false, kind: 'contains', reason: `${parsed.path} unreadable` }; }
+  return body.includes(parsed.text)
+    ? { closed: true, kind: 'contains', citation: parsed.path, reason: `${parsed.path} contains ${parsed.text}` }
+    : { closed: false, kind: 'contains', reason: `${parsed.path} does not contain ${parsed.text}` };
 }
 
 // async wrapper: runs the test check kind by executing the project's tests
+function namedTestResult(out, name) {
+  const lines = String(out || '').split('\n');
+  if (lines.some((l) => /not ok\b/.test(l) && l.includes(name))) return false;
+  if (lines.some((l) => /^\s*ok\b/.test(l) && l.includes(name))) return true;
+  return null;
+}
+
 export async function runBehaviorCheckAsync(behavior, cwd, opts = {}) {
-  const sync = runBehaviorCheck(behavior, cwd, opts); // opts.refPath flows through
-  if (sync.kind === 'issue') {
-    const issues = mentionedIssues(behavior);
-    for (const n of issues) {
-      const okIssue = await issueExists(n, opts);
-      if (!okIssue.ok) return { closed: false, kind: 'issue', reason: `issue #${n}: ${okIssue.reason}` };
+  const sync = runBehaviorCheck(behavior, cwd);
+  const timeout = opts.testTimeoutMs || 1000 * 60 * 5;
+  if (sync.kind === 'command' && sync.closed === null) {
+    try {
+      await run('sh', ['-c', sync.command], { cwd, timeout, maxBuffer: 1024 * 1024 * 4 });
+      return { closed: true, kind: 'command', citation: `${sync.command} (exit 0)`, reason: 'command exited 0' };
+    } catch (e) {
+      const tail = `${e.stdout || ''}${e.stderr || e.message || ''}`.slice(-400);
+      return { closed: false, kind: 'command', citation: `${sync.command} (exit ${e.code ?? 1})`, reason: `command failed: ${tail}` };
     }
-    return { closed: true, kind: 'issue', citation: `issue #${issues.join(', #')}`, reason: 'all cited issues exist' };
   }
-  if (sync.kind !== 'test') return sync;
+  if (sync.kind !== 'test' || sync.closed !== null) return sync;
   if (!opts.testCmd) return { closed: false, kind: 'test', reason: 'no project test command detected' };
+  const label = `${opts.testCmd.cmd} ${opts.testCmd.args.join(' ')}`.trim();
   try {
-    await run(opts.testCmd.cmd, opts.testCmd.args, { cwd, timeout: opts.testTimeoutMs || 1000 * 60 * 5, maxBuffer: 1024 * 1024 * 8 });
-    return { closed: true, kind: 'test', citation: `${opts.testCmd.cmd} ${opts.testCmd.args.join(' ')} (exit 0)`, reason: 'project tests pass' };
+    await run(opts.testCmd.cmd, opts.testCmd.args, { cwd, timeout, maxBuffer: 1024 * 1024 * 8 });
+    return { closed: true, kind: 'test', citation: `${label} (exit 0)`, reason: sync.name ? `test ${sync.name} passed` : 'project tests pass' };
   } catch (e) {
-    return { closed: false, kind: 'test', citation: `${opts.testCmd.cmd} (exit ${e.code ?? 1})`, reason: 'project tests fail' };
+    const out = `${e.stdout || ''}\n${e.stderr || ''}`;
+    if (sync.name && namedTestResult(out, sync.name) === true) {
+      return { closed: true, kind: 'test', citation: `${label} (${sync.name})`, reason: `test ${sync.name} passed` };
+    }
+    const tail = out.trim().slice(-400) || 'project tests fail';
+    return { closed: false, kind: 'test', citation: `${label} (exit ${e.code ?? 1})`, reason: sync.name ? `test ${sync.name} failed: ${tail}` : tail };
   }
 }
 
@@ -177,39 +167,4 @@ export async function verifyContract(behaviors, cwd, opts = {}) {
   }
   const closed = results.filter((r) => r.closed).length;
   return { results, closed, open: results.length - closed, total: results.length };
-}
-
-// does an issue exist? gh CLI (authoritative) -> offline gh-items cache -> absent
-async function issueExists(n, opts = {}) {
-  const { execFile } = await import('node:child_process');
-  const { promisify } = await import('node:util');
-  const runE = promisify(execFile);
-  const gh = opts.gh || 'gh';
-  try {
-    const args = ['issue', 'view', String(n), '--json', 'number,state,title'];
-    if (opts.ghRepo) args.push('--repo', opts.ghRepo);
-    await runE(gh, args, { timeout: 15000 });
-    return { ok: true };
-  } catch (e) {
-    const out = String(e.stdout || '');
-    if (/"number"/.test(out)) return { ok: true };            // view printed the issue
-    if (/Could not resolve|NOT_FOUND|not found/i.test(out + e.message)) {
-      return { ok: false, reason: 'not found in the repo' };
-    }
-    // gh unavailable (offline/no auth): fall back to the offline cache
-    try {
-      const { existsSync, readFileSync } = await import('node:fs');
-      const { homedir } = await import('node:os');
-      const { join } = await import('node:path');
-      const cache = join(homedir(), '.cadre', 'gh-issues.json');
-      if (existsSync(cache)) {
-        const items = JSON.parse(readFileSync(cache, 'utf-8'));
-        if (Array.isArray(items) && items.some((i) => Number(i.number) === n)) return { ok: true };
-        return { ok: false, reason: 'not in offline issue cache' };
-      }
-      return { ok: false, reason: 'gh unavailable and no offline cache (~/.cadre/gh-issues.json)' };
-    } catch {
-      return { ok: false, reason: 'gh unavailable' };
-    }
-  }
 }

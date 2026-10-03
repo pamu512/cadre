@@ -1,8 +1,14 @@
-// lanes - who's here, what they're good at, what they cost.
-// Real roster: live ax registry (exec), env-keyed API lanes, local model
-// servers, user-declared lanes in $CADRE_HOME/lanes - all validated against
-// the contract. Nothing here is hardcoded.
+// lanes - the machine scan. CLIs, apps, models, keys, MCP, ax status.
+import { writeSync } from 'node:fs';
 import { buildRoster } from '../scan.js';
+
+// console.log drops the tail of a large roster: the process exits before the
+// pipe drains. Write the whole buffer before returning.
+function emit(text) {
+  const buf = Buffer.from(String(text).endsWith('\n') ? String(text) : String(text) + '\n');
+  let off = 0;
+  while (off < buf.length) off += writeSync(1, buf, off, buf.length - off);
+}
 
 export async function cmdLanes(flags) {
   const roster = await buildRoster();
@@ -26,7 +32,7 @@ export async function cmdLanes(flags) {
   }
 
   if (flags.json) {
-    console.log(JSON.stringify({
+    emit(JSON.stringify({
       lanes,
       clis: roster.clis.map((c) => c.label),
       platform: roster.platform,
@@ -35,21 +41,20 @@ export async function cmdLanes(flags) {
   }
 
   if (lanes.length === 0) {
-    console.log('no lanes found. ax not present and $CADRE_HOME/lanes is empty.');
-    console.log('declare one: $CADRE_HOME/lanes/mine.json - see schemas/lane.schema.json');
+    emit('no lanes found. Nothing on this machine answered the scan.');
     return 0;
   }
 
   const w = (s, n) => String(s).padEnd(n);
-  console.log(`${w('LANE', 14)}${w('STATUS', 9)}${w('GOOD AT', 30)}${w('COST', 9)}${w('TALKS', 10)}PROVES`);
+  const lines = [`${w('LANE', 14)}${w('STATUS', 9)}${w('GOOD AT', 30)}${w('COST', 9)}${w('TALKS', 10)}PROVES`];
   for (const l of lanes) {
     const status = l.invoke?.status || 'ready';
-    console.log(
+    lines.push(
       `${w(l.name, 14)}${w(status, 9)}${w(l.good_at.join(', '), 30)}${w(l.cost, 9)}${w(l.talks, 10)}${w(l.proves, 14)}${l.history || '—'}`
     );
   }
-  const clis = roster.clis.map((c) => c.label).join(', ');
-  console.log(`\n${lanes.length} lane${lanes.length === 1 ? '' : 's'} · clis: ${clis || 'none'} · ${roster.platform}`);
-  console.log('contract: schemas/lane.schema.json · declare lanes in $CADRE_HOME/lanes/*.json');
+  lines.push(`\n${lanes.length} lane${lanes.length === 1 ? '' : 's'} · ${roster.clis.length} cli(s) on PATH · ${roster.platform}`);
+  lines.push('roster = this machine (clis, apps, models, keys, mcp, who is online). Nothing to enroll.');
+  emit(lines.join('\n'));
   return 0;
 }

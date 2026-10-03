@@ -20,6 +20,8 @@
     "schemas/",
     "examples/",
     "scripts/fixture-writer.sh",
+    "hands/",
+    "skills/",
     "scripts/loop-watchdog.sh",
     "docs/PRD-v0.3.md",
     "README.md"

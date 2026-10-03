@@ -31,14 +31,33 @@ export async function cmdMeter(args, flags) {
       rpm: flags.rpm ? Number(flags.rpm) : null,   // requests/min ceiling (rate-limit meter)
       rps: flags.rps ? Number(flags.rps) : null,   // requests/sec ceiling
       window_hours: flags['window-hours'] ? Number(flags['window-hours']) : null, // recurring window (e.g. 5h)
+      status_url: typeof flags['status-url'] === 'string' ? flags['status-url'] : null,
       queued: Boolean(flags.queued),               // unlimited-but-queued entitlement
       rail: flags.rail || 'official', // official = read off your provider dashboard; header = flagged fallback
       updated: new Date().toISOString(),
     };
     saveMeters([...meters.filter((x) => x.lane !== m), entry]);
     console.log(`meter set: ${m} — ${entry.quota_tokens ?? '—'} tok, reset ${entry.reset_at || '—'}, rail ${entry.rail}`);
-    console.log('  (official rails only: values you read off your provider dashboard; nothing scraped)');
+    console.log('  (loopback status endpoints are read with no credentials; other rails stay what you declared)');
     return 0;
+  }
+
+  const { readLocalMeter } = await import('../meters.js');
+  for (const m of meters) {
+    if (!m.status_url) continue;
+    const read = await readLocalMeter(m.status_url);
+    const how = read.ok ? `status ${read.status}` : (read.error || `status ${read.status}`);
+    console.log(`meter-read ${m.lane}: ${how} (credentials sent: ${read.auth === true})`);
+    if (read.ok && read.body) {
+      const { applyStatusBody, saveMeters } = await import('../meters.js');
+      const next = applyStatusBody(m, read.body);
+      if (next) {
+        const latest = (await import('../meters.js')).loadMeters();
+        saveMeters(latest.map((x) => (x.lane === m.lane ? next : x)));
+        Object.assign(m, next);
+        console.log(`meter-read ${m.lane}: applied quota ${next.quota_tokens ?? '—'} used ${next.used_tokens ?? '—'}`);
+      }
+    }
   }
 
   const usage = usageFromAudit();

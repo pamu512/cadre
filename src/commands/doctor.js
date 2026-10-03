@@ -31,10 +31,10 @@ export async function cmdDoctor(args, flags) {
     roster = await buildRoster();
     oks.push(`${roster.lanes.length} lane(s) on this machine (${roster.platform})`);
     if (roster.lanes.length === 0) {
-      problems.push({ what: 'no lanes detected', fix: 'declare one: mkdir -p ~/.cadre/lanes && cp examples/lanes/generic-cli.json ~/.cadre/lanes/ (edit the command)' });
+      problems.push({ what: 'no lanes detected', fix: 'the scan found nothing on this machine (no PATH clis, apps, models, keys, or MCP configs)' });
     }
   } catch (e) {
-    problems.push({ what: `roster scan failed: ${e.message.split('\n')[0]}`, fix: 'check ~/.cadre/lanes/*.json is valid JSON' });
+    problems.push({ what: `roster scan failed: ${e.message.split('\n')[0]}`, fix: 're-run cadre lanes; the roster is the machine scan' });
   }
 
   // keyed chat lanes

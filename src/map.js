@@ -1,7 +1,7 @@
 // map - the living codebase graph. Symbols, edges, hot zones; kept warm across
 // runs so lanes navigate instead of re-reading. Index = one JSON per repo under
-// $CADRE_HOME/maps/, keyed by absolute path hash. Learning-from-outcomes is a
-// noted opportunity (not claimed).
+// $CADRE_HOME/maps/, keyed by absolute path hash. learnFromRun folds each run's
+// files into the hot zones, so the next run is pointed at code that already mattered.
 import { createHash } from 'node:crypto';
 import {
   existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync,
@@ -122,6 +122,96 @@ export function loadMap(root) {
   const p = mapPath(root);
   if (!existsSync(p)) return null;
   try { return JSON.parse(readFileSync(p, 'utf-8')); } catch { return null; }
+}
+
+// Walk source files. The stored map only keeps a file count, so freshness
+// is the first source mtime newer than indexedAt.
+function sourceNewer(root, indexedAt) {
+  const cutoff = Date.parse(indexedAt);
+  if (!Number.isFinite(cutoff)) return true;
+  let newer = false;
+  (function walk(dir, depth) {
+    if (newer || depth > 12) return;
+    let entries;
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const ent of entries) {
+      if (newer) return;
+      const full = join(dir, ent.name);
+      if (ent.isDirectory()) {
+        if (SKIP_DIRS.has(ent.name) || ent.name.startsWith('.')) continue;
+        walk(full, depth + 1);
+      } else if (CODE_EXT.has(extname(ent.name))) {
+        try { if (statSync(full).mtimeMs > cutoff) newer = true; } catch { /* raced */ }
+      }
+    }
+  })(root, 0);
+  return newer;
+}
+
+export function ensureMap(root) {
+  const prev = loadMap(root);
+  if (prev && mapIsWarm(prev) && Array.isArray(prev.bySymbol) && !sourceNewer(root, prev.indexedAt)) return prev;
+  const fresh = buildIndex(root);
+  if (prev?.outcomes) fresh.outcomes = prev.outcomes;
+  if (prev?.hotZones?.some((h) => h.learned)) {
+    const learned = prev.hotZones.filter((h) => h.learned);
+    const rest = fresh.hotZones.filter((h) => !learned.some((l) => l.path === h.path));
+    fresh.hotZones = [...learned, ...rest].slice(0, 10);
+  }
+  saveMap(fresh);
+  return fresh;
+}
+
+// The slice a lane gets instead of the repo: hot zones, symbols, callers
+// for the files this brief named. Short on purpose.
+export function sliceFor(map, { brief = '', lock = [] } = {}) {
+  if (!map) return 'MAP (empty index)';
+  const named = new Set([...(lock || [])].filter((p) => !String(p).includes('*')));
+  const re = /[\w./-]+\.(?:js|mjs|cjs|ts|tsx|py|sh|json|md|txt)\b/g;
+  let m;
+  while ((m = re.exec(String(brief)))) named.add(m[0].replace(/^[.(/]+/, ''));
+  const failed = new Set();
+  for (const o of map.outcomes || []) {
+    if (o.passed) continue;
+    for (const f of o.files || []) failed.add(String(f));
+  }
+  const failedHit = (files) => (files || []).some((f) => failed.has(f));
+  const symbols = (map.bySymbol || [])
+    .filter((s) => (s.files || []).some((f) => named.has(f)))
+    .sort((a, b) => Number(failedHit(b.files)) - Number(failedHit(a.files)))
+    .slice(0, 12);
+  const callers = (map.imports || []).filter((i) => named.has(i.spec) || named.has(i.from) || [...named].some((n) => String(i.spec || '').endsWith(n))).slice(0, 12);
+  const hot = (map.hotZones || []).slice(0, 5).map((h) => h.path);
+  const lines = ['MAP'];
+  const failedNamed = [...failed].filter((f) => named.has(f) || [...named].some((n) => f === n || f.endsWith(`/${n}`)));
+  if (failedNamed.length) lines.push(`failed: ${failedNamed.slice(0, 8).join(', ')}`);
+  if (hot.length) lines.push(`hot: ${hot.join(', ')}`);
+  for (const s of symbols) lines.push(`symbol ${s.name} in ${(s.files || []).join(', ')}`);
+  for (const c of callers) lines.push(`calls ${c.from} -> ${c.spec}`);
+  if (lines.length === 1) lines.push('(no symbols in the locked files)');
+  return lines.join('\n');
+}
+
+export function learnFromRun(root, { files = [], passed = false, lane = null } = {}) {
+  const map = loadMap(root) || {
+    root, indexedAt: new Date().toISOString(), files: [], imports: [], bySymbol: [], hotZones: [], outcomes: [],
+  };
+  map.outcomes = Array.isArray(map.outcomes) ? map.outcomes : [];
+  map.outcomes.push({ at: new Date().toISOString(), passed: Boolean(passed), lane: lane || null, files: files.slice(0, 20) });
+  map.outcomes = map.outcomes.slice(-40);
+  const scores = new Map();
+  for (const o of map.outcomes) {
+    for (const f of o.files || []) scores.set(f, (scores.get(f) || 0) + (o.passed ? 2 : 1));
+  }
+  const learned = [...scores.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10)
+    .map(([path, fanIn]) => ({ path, fanIn, learned: true }));
+  const prior = (map.hotZones || []).filter((h) => !learned.some((l) => l.path === h.path));
+  map.hotZones = [...learned, ...prior].slice(0, 10);
+  map.indexedAt = new Date().toISOString();
+  saveMap(map);
+  return map;
 }
 
 export function mapIsWarm(map, maxAgeMs = 1000 * 60 * 10) {

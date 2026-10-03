@@ -1,9 +1,9 @@
 // sweep - triage leftover runs. Reads REAL run records; a leftover is any
 // run still in running/interrupted/gating. --all includes settled ones.
 // --retire <id> marks a leftover retired (settled, verdict recorded as such);
-// --resume <id> just marks it back running so `go` continues fresh (cadre
-// runs are not resumable mid-pipeline; resume = re-brief).
-import { listRuns, updateRun, home, tryReadRun, runDir, lockPath, hasLock, readRun } from '../store.js';
+// --resume <id> checkpoints the run. Continue it with `cadre go --resume <id>`.
+import { createHash } from 'node:crypto';
+import { listRuns, updateRun, createRun, home, tryReadRun, runDir, lockPath, hasLock, readRun } from '../store.js';
 import { audit } from '../store.js';
 import { writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -12,7 +12,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const run = promisify(execFile);
-const LEFTOVER = ['running', 'interrupted', 'gating'];
+const LEFTOVER = ['running', 'interrupted', 'gating', 'checkpointed', 'queued'];
 
 function pidAlive(pid) {
   if (!pid) return false;
@@ -97,13 +97,14 @@ export async function cmdSweep(args, flags) {
       steps_logged: stepsLogged,
       steps_remaining: stepsRemaining,
       rebrief_command: `cadre go "${String(run.brief).replace(/"/g, '\\"')}"`,
-      honest_note: 'cadre runs are not resumable mid-pipeline; resume = re-brief with prior evidence attached',
+      continue_command: `cadre go --resume ${id}`,
+      honest_note: 'continues from the checkpoint via cadre go --resume; evidence stays on this run',
       generated: new Date().toISOString(),
     };
     writeFileSync(join(runDir(id), 'resume-plan.json'), JSON.stringify(plan, null, 2));
-    updateRun(id, { status: 'resumed-brief', ended: new Date().toISOString() });
+    updateRun(id, { status: 'checkpointed', checkpoint: run.checkpoint || { phases: stepsLogged.map((s) => s.toLowerCase()) } });
     audit({ kind: 'sweep-resume', run: id });
-    console.log(`run ${id} marked for re-brief: ${plan.rebrief_command}`);
+    console.log(`run ${id} checkpointed: ${plan.continue_command}`);
     console.log(`  resume plan: ${join(runDir(id), 'resume-plan.json')} (${plan.evidence_kept.length} evidence kept, ${plan.steps_remaining.length} step(s) remaining)`);
     return 0;
   }
@@ -117,6 +118,18 @@ export async function cmdSweep(args, flags) {
   }
   console.log(`${show.length} run(s) needing attention:`);
   for (const r of show) {
+    const ref = r.meta?.ref;
+    const prev = r.meta?.refSha;
+    if (ref && prev && existsSync(ref)) {
+      const now = createHash('sha256').update(readFileSync(ref)).digest('hex');
+      if (now !== prev) {
+        const neu = createRun({ brief: r.brief, kind: 'parity', meta: { ref, refSha: now, queuedFrom: r.id } });
+        updateRun(neu.id, { status: 'queued', verdict: { passed: false, summary: `reference moved; re-locked from ${r.id}` } });
+        updateRun(r.id, { status: 'retired', ended: new Date().toISOString(), verdict: { passed: false, summary: `reference moved; re-locked as ${neu.id}` } });
+        console.log(`  ${r.id}  reference moved · retired · queued ${neu.id} to re-lock ${ref}`);
+        continue;
+      }
+    }
     const dur = r.started ? `· started ${r.started.slice(0, 19).replace('T', ' ')}` : '';
     const lock = hasLock(r.id) ? ' · lock held' : '';
     const dead = hasLock(r.id) && !pidAlive(tryReadRun(r.id)?.meta?.pid) ? ' (pid gone - crashed or killed)' : '';
