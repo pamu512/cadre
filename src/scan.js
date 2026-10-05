@@ -23,10 +23,11 @@ const AX = process.env.CADRE_AX || join(homedir(), '.local/bin/ax');
 const AX_WORKER = ['planning', 'edits', 'review', 'verify'];
 
 // Public endpoints for key NAMES we recognize. Any other *_API_KEY still
-// becomes a lane; we just don't invent a URL for it.
+// becomes a lane; we just don't invent a URL for it. Anthropic keys ride
+// the chat POST driver through any OpenAI-compatible gateway; cadre no
+// longer ships a provider-specific driver.
 const KEY_ENDPOINTS = {
   OPENAI_API_KEY: { kind: 'openai-compatible', base_url: 'https://api.openai.com', good_at: ['reasoning'] },
-  ANTHROPIC_API_KEY: { kind: 'anthropic', base_url: 'https://api.anthropic.com', good_at: ['reasoning'] },
   GLM_API_KEY: { kind: 'openai-compatible', base_url: 'https://api.z.ai/api/paas/v4/chat/completions', good_at: ['reasoning'] },
 };
 
@@ -340,23 +341,6 @@ export function bindAppTwins(apps, clis) {
   });
 }
 
-export function scanSlackLane(env = process.env) {
-  const envName = ['CADRE_SLACK_WEBHOOK', 'SLACK_WEBHOOK_URL'].find((n) => {
-    const v = env[n];
-    return typeof v === 'string' && v.startsWith('https://');
-  });
-  if (!envName) return [];
-  return [{
-    name: 'slack-teammate',
-    identity: 'reviews diffs',
-    good_at: ['review'],
-    cost: 'coffee',
-    talks: 'http',
-    proves: 'verdict',
-    invoke: { kind: 'slack', env: envName, status: 'ready' },
-  }];
-}
-
 export async function scanMachine() {
   const [axLanes, clis, local, running] = await Promise.all([
     scanAxLanes(),
@@ -368,9 +352,8 @@ export async function scanMachine() {
   const mcpLanes = probeMcpServers();
   const appLanes = bindAppTwins(platform() === 'darwin' ? probeAgentApps(appDirs(), running) : [], clis);
   const agents = scanAgentLanes(clis);
-  const slack = scanSlackLane();
   return {
-    lanes: [...axLanes, ...agents, ...clis, ...keys, ...local, ...mcpLanes, ...appLanes, ...slack, HUMAN_LANE],
+    lanes: [...axLanes, ...agents, ...clis, ...keys, ...local, ...mcpLanes, ...appLanes, HUMAN_LANE],
     clis: clis.map((l) => ({ label: l.invoke.bin, path: l.invoke.path })),
     platform: platform(),
   };

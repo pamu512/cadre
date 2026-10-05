@@ -210,38 +210,12 @@ test('scan: apps, keys, and local models come from the machine', async () => {
   assert.deepEqual(modelsFromOpenAIList({ data: [{ id: 'local-model' }] }), ['local-model']);
 });
 
-test('invoke: MCP lane lifecycle over stdio (initialize -> tools -> call)', { timeout: 60000 }, async () => {
+test('invoke: the inner MCP client is gone - an mcp lane honestly refuses', async () => {
   const { invokeLane } = await import(join(ROOT, 'src/invoke.js'));
-  // a minimal in-repo MCP server we control: node echo of tools/call
-  const serverScript = join(ROOT, 'scripts/fixture-writer.sh'); // not MCP; use inline node instead
-  const { spawn } = await import('node:child_process');
-  // tiny MCP server as a node -e command
-  const cmd = process.execPath;
-  const code = `
-    let buf='';
-    process.stdin.on('data', (d) => {
-      buf += d;
-      let nl;
-      while ((nl = buf.indexOf('\\n')) > -1) {
-        const line = buf.slice(0, nl).trim(); buf = buf.slice(nl+1);
-        if (!line) continue;
-        const m = JSON.parse(line);
-        if (m.method === 'initialize') {
-          process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result:{protocolVersion:'2024-11-05',capabilities:{},serverInfo:{name:'testsrv',version:'0'}}})+'\\n');
-        } else if (m.method === 'tools/list') {
-          process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result:{tools:[{name:'echo_task',description:'echoes',inputSchema:{type:'object',properties:{text:{type:'string'}}}}]}})+'\\n');
-        } else if (m.method === 'tools/call') {
-          process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result:{content:[{type:'text',text:'ECHOED: '+m.params.arguments.text}]}})+'\\n');
-        }
-      }
-    });
-  `;
-  const lane = { name: 'mcp-testsrv', invoke: { kind: 'mcp', command: cmd, args: ['-e', code] } };
-  const r = await invokeLane(lane, 'hello mcp world', { timeoutMs: 20000 });
-  assert.ok(r.ok, 'lifecycle must complete: ' + (r.error || ''));
-  assert.equal(r.tool, 'echo_task');
-  assert.ok(r.text.includes('ECHOED: hello mcp world'));
-  assert.deepEqual(r.toolsAvailable, ['echo_task']);
+  const r = await invokeLane({ name: 'mcp-x', invoke: { kind: 'mcp', command: '/bin/echo' } }, 'do thing');
+  assert.ok(!r.ok);
+  assert.ok(r.error.includes('no driver for invoke.kind=mcp'), 'mcp is not an invoke kind anymore: ' + r.error);
+  assert.ok(r.error.includes('command argv') && r.error.includes('chat POST'));
 });
 
 test('invoke: app lane is presence-only with an honest error', async () => {
@@ -251,45 +225,18 @@ test('invoke: app lane is presence-only with an honest error', async () => {
   assert.ok(r.error.includes('presence-only'));
 });
 
-test('invoke: MCP agent mode chains tools, read-only by default, condenses JSON replies', { timeout: 60000 }, async () => {
-  const { invokeMcpAgent } = await import(join(ROOT, 'src/mcplane.js'));
-  const cmd = process.execPath;
-  const code = `
-    let buf='';
-    process.stdin.on('data', (d) => {
-      buf += d;
-      let nl;
-      while ((nl = buf.indexOf('\\n')) > -1) {
-        const line = buf.slice(0, nl).trim(); buf = buf.slice(nl+1);
-        if (!line) continue;
-        const m = JSON.parse(line);
-        if (m.method === 'initialize') {
-          process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result:{protocolVersion:'2024-11-05',capabilities:{},serverInfo:{name:'chain',version:'0'}}})+'\\n');
-        } else if (m.method === 'tools/list') {
-          process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result:{tools:[
-            {name:'get_thing',inputSchema:{type:'object',properties:{q:{type:'string'}}}},
-            {name:'use_thing',inputSchema:{type:'object',properties:{text:{type:'string'}}}},
-            {name:'save_thing',inputSchema:{type:'object',properties:{text:{type:'string'}}}}
-          ]}})+'\\n');
-        } else if (m.method === 'tools/call') {
-          const a = m.params.arguments || {};
-          if (m.params.name === 'get_thing') process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result:{content:[{type:'text',text:JSON.stringify({ok:true,thing:'use thing now please'})}]}})+'\\n');
-          else if (m.params.name === 'use_thing') process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result:{content:[{type:'text',text:'USED: '+a.text}]}})+'\\n');
-          else process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result:{content:[{type:'text',text:'SAVED'}]}})+'\\n');
-        }
-      }
-    });
-  `;
-  const lane = { name: 'mcp-chain', invoke: { kind: 'mcp', command: cmd, args: ['-e', code] } };
-  // read-only brief: get (read) -> use (read verb 'use'? no - 'use' isn't a write verb, allowed)
-  const r = await invokeMcpAgent(lane, 'get the thing then use it', { timeoutMs: 20000, maxSteps: 4 });
-  assert.ok(r.ok, 'chain must succeed: ' + (r.error || ''));
-  const names = r.steps.map((s) => s.tool);
-  assert.ok(names.includes('get_thing') && names.includes('use_thing'), 'reads chained: ' + names.join(','));
-  assert.ok(!names.includes('save_thing'), 'write tool must NOT fire on a read brief');
-  // the use_thing call must receive the condensed string leaf, not the raw JSON blob
-  const use = r.steps.find((s) => s.tool === 'use_thing');
-  assert.ok(String(use.reply).includes('use thing now please'), 'JSON condensed to its string leaf');
+test('invoke: slack and anthropic kinds are gone - two drivers only', async () => {
+  const { invokeLane, laneDrivable } = await import(join(ROOT, 'src/invoke.js'));
+  const slack = await invokeLane({ name: 's', invoke: { kind: 'slack', env: 'X' } }, 't');
+  assert.ok(!slack.ok && slack.error.includes('no driver for invoke.kind=slack'));
+  const anth = await invokeLane({ name: 'a', invoke: { kind: 'anthropic', env: 'X' } }, 't');
+  assert.ok(!anth.ok && anth.error.includes('no driver for invoke.kind=anthropic'));
+  assert.equal(laneDrivable({ invoke: { kind: 'slack' } }), false);
+  assert.equal(laneDrivable({ invoke: { kind: 'anthropic' } }), false);
+  assert.equal(laneDrivable({ invoke: { kind: 'mcp' } }), false);
+  // the two that remain
+  assert.equal(laneDrivable({ invoke: { kind: 'command' } }), true);
+  assert.equal(laneDrivable({ invoke: { kind: 'ax' } }), true);
 });
 
 test('rules critic: all four roles fire unconditionally - rules tier fires when no chat lane', async () => {

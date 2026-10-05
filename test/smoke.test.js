@@ -207,18 +207,25 @@ test('mcp speaks JSON-RPC on stdio', async () => {
 });
 
 // ---- engine units -----------------------------------------------------------
-test('gate: verdict requires all four evidence families', async () => {
-  const { gateVerdict } = await import(join(ROOT, 'src/gate.js'));
+test('gate: commands + diff + artifact suffice; citations checked when claimed; unstamped evidence refused', async () => {
+  const { gateVerdict, stampEvidence } = await import(join(ROOT, 'src/gate.js'));
+  const stamp = (e, how = 'observed') => stampEvidence(e, { how });
   const base = { evidence: [
-    { kind: 'command', command: 'npm test', exit: 0, output: 'ok' },
-    { kind: 'diff', path: 'a.js', plus: 3, minus: 1 },
-    { kind: 'artifact', path: join(ROOT, 'package.json') },
+    stamp({ kind: 'command', command: 'npm test', argv: ['npm', 'test'], exit: 0, output: 'ok' }),
+    stamp({ kind: 'diff', path: 'a.js', plus: 3, minus: 1 }),
+    stamp({ kind: 'artifact', path: join(ROOT, 'package.json') }),
+    stamp({ kind: 'command', command: 'npm test', argv: ['npm', 'test'], exit: 0, output: 'ok', cadre: { by: 'cadre', at: new Date().toISOString(), pid: 4242, recorder: process.pid, how: 'spawn' } }, 'spawn'),
   ] };
-  const missing = gateVerdict(base);
-  assert.equal(missing.passed, false);
-  assert.deepEqual(missing.missing, ['citations']);
-  const full = gateVerdict({ evidence: [...base.evidence, { kind: 'citation', ref: 'README.md' }] });
-  assert.equal(full.passed, true);
+  // commands + diff + artifact pass WITHOUT citations (citations are checked
+  // when claimed, not demanded)
+  const three = gateVerdict(base);
+  assert.equal(three.passed, true, three.summary);
+  // an http citation with no fetch receipt fails when claimed
+  const deadHttp = gateVerdict({ evidence: [...base.evidence, stamp({ kind: 'citation', ref: 'https://example.com/x' })] });
+  assert.equal(deadHttp.passed, false, 'http citation must not count before a fetch');
+  // an unstamped item is not evidence at all
+  const unstamped = gateVerdict({ evidence: [...base.evidence, { kind: 'diff', path: 'b.js', plus: 1, minus: 0 }] });
+  assert.ok(unstamped.failed.some((f) => /no cadre provenance stamp/.test(f.detail)), 'unstamped evidence must be refused');
 });
 
 test('gate: artifact that vanished fails at gate time', async () => {

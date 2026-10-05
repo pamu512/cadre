@@ -926,7 +926,7 @@
           <div class="steps" style="margin-top:  34px;">
             <div class="step">
               <span class="step-num">01</span>
-              <div><h3>Connect once</h3><p><span style="font-family: var(--font-mono); font-size: 14px;">cadre mcp</span> prints a five-line config. Paste it into your client and twelve tools appear — go, parity, plan, meter, map, sweep, lanes, watch, proof, debate, pin, and doctor. No plugin store, no account. Cadre does not draw the panel; the host agent does.</p></div>
+              <div><h3>Connect once</h3><p><span style="font-family: var(--font-mono); font-size: 14px;">cadre mcp</span> prints a five-line config. Paste it into your client and twelve tools appear — go (dry by default; live returns a run id), status (read-only), parity, plan, meter, map, sweep, lanes, watch, proof, debate, and doctor. Pinning stays at the terminal. No plugin store, no account. Cadre does not draw the panel; the host agent does.</p></div>
             </div>
             <div class="step">
               <span class="step-num">02</span>
@@ -1054,7 +1054,7 @@
           <tr><td><strong>cadre watch</strong> id</td><td>Tail a run log. --replay prints the settled log.</td><td class="fl">--replay</td></tr>
           <tr><td><strong>cadre proof</strong> id</td><td>The evidence bundle: commands, diffs, artifacts, citations. --verify re-runs the commands.</td><td class="fl">--verify</td></tr>
           <tr><td><strong>cadre debate</strong> "question"</td><td>Two ax lanes argue. Needs ax on the machine. Transcripts are filed under ~/.cadre.</td><td class="fl">needs ax</td></tr>
-          <tr><td><strong>cadre pin</strong></td><td>Optional guardrails: pin a role, cap tokens, set quiet hours.</td><td class="fl">--role · --budget · --quiet · --clear</td></tr>
+          <tr><td><strong>cadre pin</strong></td><td>Optional guardrails: pin a role, cap tokens, set quiet hours. Terminal-only by design — not exposed over MCP.</td><td class="fl">--role · --budget · --quiet · --clear</td></tr>
           <tr><td><strong>cadre doctor</strong></td><td>Cold-machine preflight. One fix line per problem.</td><td class="fl">--json</td></tr>
           <tr><td><strong>cadre init</strong></td><td>Scaffold ~/.cadre with an example lane. Running it again changes nothing.</td><td class="fl">idempotent</td></tr>
         </tbody>
@@ -1375,7 +1375,7 @@
     { t: 'p', cls: 'c-d', html: 'serving stdio · <span class="sp">12 tools exposed to MCP clients</span>', d: 420 },
     { t: 'p', cls: 'c-bt', html: 'cadre_go · cadre_parity · cadre_plan · cadre_meter' },
     { t: 'p', cls: 'c-bt', html: 'cadre_sweep · cadre_lanes · cadre_watch · cadre_proof' },
-    { t: 'p', cls: 'c-bt', html: 'cadre_map · cadre_debate · cadre_pin · cadre_doctor', d: 240 },
+    { t: 'p', cls: 'c-bt', html: 'cadre_map · cadre_debate · cadre_status · cadre_doctor', d: 240 },
     { t: 'p', html: '&nbsp;' },
     { t: 'p', cls: 'c-d', html: 'config → paste into your client:' },
     { t: 'p', cls: 'c-a', html: '{ "mcpServers": { "cadre": {' },
