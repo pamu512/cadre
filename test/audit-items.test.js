@@ -33,37 +33,49 @@ test('P0#5: cadre doctor runs and reports health with fix lines', async () => {
   assert.ok(/healthy|fix:/.test(r.stdout));
 });
 
-test('P0#2: MCP tools/list includes go/sweep/watch/pin; cadre_go dry returns routing', async () => {
+test('P0#2: MCP tools/list has go/sweep/watch/status, NOT pin; cadre_go defaults dry; unknown tool is a protocol error', async () => {
   const h = home('mcp2');
   const p = spawn('node', [join(ROOT, 'bin/cadre.js'), 'mcp'], { stdio: ['pipe', 'pipe', 'pipe'], env: h.env });
   let buf = ''; const replies = [];
   p.stdout.on('data', (d) => { buf += d; let n; while ((n = buf.indexOf('\n')) > -1) { const l = buf.slice(0, n).trim(); buf = buf.slice(n + 1); if (l) replies.push(JSON.parse(l)); } });
   p.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }) + '\n');
-  p.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'cadre_go', arguments: { outcome: 'demo task', dry: true } } }) + '\n');
+  // no dry flag, no live flag: must default to dry (routing text, no spend)
+  p.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'cadre_go', arguments: { outcome: 'demo task' } } }) + '\n');
+  p.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'cadre_nope', arguments: {} } }) + '\n');
   await new Promise((r) => setTimeout(r, 2500));
   p.kill();
   const tools = replies.find((r) => r.id === 1)?.result?.tools?.map((t) => t.name) || [];
-  for (const t of ['cadre_go', 'cadre_sweep', 'cadre_watch', 'cadre_pin']) assert.ok(tools.includes(t), `${t} missing from tools/list`);
+  for (const t of ['cadre_go', 'cadre_sweep', 'cadre_watch', 'cadre_status']) assert.ok(tools.includes(t), `${t} missing from tools/list`);
+  assert.equal(tools.includes('cadre_pin'), false, 'cadre_pin must NOT be exposed over MCP');
   const go = replies.find((r) => r.id === 2);
-  assert.ok((go?.result?.content?.[0]?.text || '').length > 50, 'cadre_go dry must return routing text');
+  assert.ok((go?.result?.content?.[0]?.text || '').length > 50, 'cadre_go (default dry) must return routing text');
+  assert.ok(/pipeline/.test(go?.result?.content?.[0]?.text || ''), 'dry routing text must show the pipeline');
+  const unknown = replies.find((r) => r.id === 3);
+  assert.ok(unknown?.error && unknown.error.code === -32601, 'unknown tool must be a JSON-RPC error');
 });
 
-test('P0#8/B8: builder-only command evidence fails the gate; mixed passes', async () => {
-  const { gateVerdict } = await import(join(ROOT, 'src/gate.js'));
+test('P0#8/B8: independence means a second PROCESS cadre spawned; a missing by-field is NOT independent', async () => {
+  const { gateVerdict, stampEvidence } = await import(join(ROOT, 'src/gate.js'));
+  const stamp = (e) => stampEvidence(e);
+  const spawnStamp = { by: 'cadre', at: new Date().toISOString(), pid: 4242, recorder: process.pid, how: 'spawn' };
   const base = {
     roles: { builder: 'the-builder', verifier: 'the-verifier' },
     evidence: [
-      { kind: 'command', label: 'x', command: 'true', exit: 0, output: 'ok', by: 'the-builder' },
-      { kind: 'diff', label: 'f', path: 'f', plus: 3, minus: 1 },
-      { kind: 'artifact', label: 'README.md', path: 'README.md' },
-      { kind: 'citation', label: 'c', ref: 'README.md' },
+      stamp({ kind: 'command', label: 'x', command: 'true', argv: ['true'], exit: 0, output: 'ok' }),
+      stamp({ kind: 'diff', label: 'f', path: 'README.md', plus: 3, minus: 1 }),
+      stamp({ kind: 'artifact', label: 'README.md', path: 'README.md' }),
     ],
   };
+  // same-process command evidence only: NOT independent
   const bad = gateVerdict(base);
-  assert.ok(!bad.passed, 'builder-only command evidence must fail');
-  assert.ok(bad.independence.note.includes('non-builder'));
-  const good = gateVerdict({ ...base, evidence: [...base.evidence, { kind: 'command', label: 'v', command: 'npm test', exit: 0, output: 'ok', by: 'the-verifier' }] });
-  assert.ok(good.passed, 'mixed evidence must pass');
+  assert.ok(!bad.passed, 'no second-process command must fail');
+  assert.ok(bad.independence.note.includes('spawned'), 'note must name the second-process rule');
+  // a by-field alone (even a verifier one) is not a process: still fails
+  const byField = gateVerdict({ ...base, evidence: [...base.evidence, stamp({ kind: 'command', label: 'v', command: 'npm test', argv: ['npm', 'test'], exit: 0, output: 'ok', by: 'the-verifier' })] });
+  assert.ok(!byField.passed, 'a by-field without a spawn stamp is not independence');
+  // a command with a spawn stamp (different pid) IS the second process
+  const good = gateVerdict({ ...base, evidence: [...base.evidence, stamp({ kind: 'command', label: 'v', command: 'npm test', argv: ['npm', 'test'], exit: 0, output: 'ok', cadre: spawnStamp })] });
+  assert.ok(good.passed, 'spawned-process command evidence must pass');
 });
 
 test('P1#6: a CLI on PATH is a roster lane, with no lane file', async () => {
@@ -159,20 +171,26 @@ test('P2#14: parity --dry extracts the behavior contract from the ref', async ()
 });
 
 // ---- citation-ref existence at the gate ---------------------------------------
-test('gate: bogus citation ref fails the citations family; real ref passes', async () => {
-  const { gateVerdict } = await import(join(ROOT, 'src/gate.js'));
+test('gate: bogus citation ref fails the citations family; real ref passes; http needs a fetch receipt', async () => {
+  const { gateVerdict, stampEvidence } = await import(join(ROOT, 'src/gate.js'));
+  const stamp = (e) => stampEvidence(e);
+  const spawnStamp = { by: 'cadre', at: new Date().toISOString(), pid: 4242, recorder: process.pid, how: 'spawn' };
   const base = { roles: {}, evidence: [
-    { kind: 'command', command: 'true', exit: 0, output: 'ok' },
-    { kind: 'diff', path: 'f', plus: 2, minus: 1 },
-    { kind: 'artifact', label: 'README.md', path: 'README.md' },
+    stamp({ kind: 'command', command: 'true', argv: ['true'], exit: 0, output: 'ok', cadre: spawnStamp }),
+    stamp({ kind: 'diff', path: 'README.md', plus: 2, minus: 1 }),
+    stamp({ kind: 'artifact', label: 'README.md', path: 'README.md' }),
   ] };
-  const bogus = gateVerdict({ ...base, evidence: [...base.evidence, { kind: 'citation', label: 'x', ref: 'no/such/file.anywhere' }] });
+  const bogus = gateVerdict({ ...base, evidence: [...base.evidence, stamp({ kind: 'citation', label: 'x', ref: 'no/such/file.anywhere' })] });
   assert.ok(!bogus.passed, 'bogus ref must fail');
   assert.ok(bogus.failed.some((f) => f.family === 'citations' && String(f.detail).includes('missing at gate time')));
-  const real = gateVerdict({ ...base, evidence: [...base.evidence, { kind: 'citation', label: 'r', ref: 'README.md' }] });
+  const real = gateVerdict({ ...base, evidence: [...base.evidence, stamp({ kind: 'citation', label: 'r', ref: 'README.md' })] });
   assert.ok(real.passed, 'real ref must pass');
-  const http = gateVerdict({ ...base, evidence: [...base.evidence, { kind: 'citation', label: 'u', ref: 'https://example.com/x' }] });
-  assert.ok(http.passed, 'http refs are followable, must pass');
+  // http WITHOUT a receipt: not counted
+  const httpBare = gateVerdict({ ...base, evidence: [...base.evidence, stamp({ kind: 'citation', label: 'u', ref: 'https://example.com/x' })] });
+  assert.ok(!httpBare.passed, 'http ref with no fetch receipt must fail');
+  // http WITH a fetch receipt: counted
+  const http = gateVerdict({ ...base, evidence: [...base.evidence, stamp({ kind: 'citation', label: 'u', ref: 'https://example.com/x', fetch: { url: 'https://example.com/x', status: 200, ok: true, at: new Date().toISOString() } })] });
+  assert.ok(http.passed, 'fetched http ref must pass');
 });
 
 // ---- history-aware routing ----------------------------------------------------

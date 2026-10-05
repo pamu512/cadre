@@ -99,7 +99,9 @@ export async function cmdProof(args, flags) {
         if (!ok) { fails += 1; console.log(`    ✗ artifact missing: ${e.path}`); }
       }
     }
-    if (gate.passed) {
+    // --verify re-runs the claimed commands against reality regardless of
+    // the recorded verdict - the audit does not trust the record's own grade
+    {
       const reverified = await verifyCommands(run, { cwd: run?.meta?.cwd || process.cwd(), max: 3 });
       for (const rv of reverified) {
         if (!rv.ok) { fails += 1; console.log(`    ✗ re-run failed (exit ${rv.reexit}): ${rv.command}`); }

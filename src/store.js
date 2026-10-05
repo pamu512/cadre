@@ -6,6 +6,7 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { stampEvidence } from './gate.js';
 
 export function home() {
   return process.env.CADRE_HOME || join(homedir(), '.cadre');
@@ -83,7 +84,9 @@ export function appendLog(id, line) {
 
 export function addEvidence(id, item) {
   const cur = readRun(id);
-  cur.evidence.push(item);
+  // the only door: everything filed as evidence is stamped cadre-produced
+  // here (folds of prior-run evidence carry their original stamp through).
+  cur.evidence.push(stampEvidence(item));
   return updateRun(id, { evidence: cur.evidence });
 }
 

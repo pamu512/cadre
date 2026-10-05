@@ -423,24 +423,16 @@ test('hand memory keeps the runs whose files overlap the task', async () => {
   }
 });
 
-test('a slack reply already in the inbox is the build, with no second post', async () => {
-  const h = home('slack');
-  const prev = process.env.CADRE_HOME;
-  process.env.CADRE_HOME = h.dir;
-  try {
-    const { invokeLane } = await import(join(ROOT, 'src/invoke.js'));
-    mkdirSync(join(h.dir, 'inbox'), { recursive: true });
-    writeFileSync(join(h.dir, 'inbox', '0007.txt'), 'the reply');
-    const res = await invokeLane(
-      { name: 'slack-team', invoke: { kind: 'slack', env: 'CADRE_SLACK_WEBHOOK' } },
-      'please look',
-      { runId: '0007' },
-    );
-    assert.equal(res.ok, true);
-    assert.equal(res.stdout, 'the reply');
-  } finally {
-    if (prev) process.env.CADRE_HOME = prev; else delete process.env.CADRE_HOME;
-  }
+test('invoke: slack is not a driver anymore - honest refusal, two drivers only', async () => {
+  const { invokeLane } = await import(join(ROOT, 'src/invoke.js'));
+  const res = await invokeLane(
+    { name: 'slack-team', invoke: { kind: 'slack', env: 'CADRE_SLACK_WEBHOOK' } },
+    'please look',
+    { runId: '0007' },
+  );
+  assert.equal(res.ok, false);
+  assert.ok(res.error.includes('no driver for invoke.kind=slack'));
+  assert.ok(res.error.includes('command argv') && res.error.includes('chat POST'));
 });
 
 test('a newer source file rebuilds a warm map, and a failed file is named in the slice', async () => {

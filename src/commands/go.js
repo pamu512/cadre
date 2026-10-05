@@ -13,7 +13,7 @@ import { laneDrivable } from '../invoke.js';
 import { assignRoles, explainRouting, bestDrivable } from '../router.js';
 import { auditCall } from '../laneaudit.js';
 import { chatLaneAvailable, chatLane } from '../chatlane.js';
-import { gateVerdict, renderGateReport, verifyCommands } from '../gate.js';
+import { gateVerdict, renderGateReport, verifyCommands, runGate } from '../gate.js';
 import { invokeLane } from '../invoke.js';
 import { buildScopeManifest, scopeCreep, renderManifest, checkDoneCondition, writeScopeFile, readScopeFile, runDeltaFiles, settleCreep, lockSpecs } from '../scope.js';
 import {
@@ -477,7 +477,7 @@ meteredTokens += (res.usage?.total_tokens || 0);
         console.log(`race · ${slots.length} builders racing in isolated worktrees: ${slots.map((x) => x.lane.name).join(', ')}`);
         appendLog(record.id, `RACE start: ${slots.map((x) => x.lane.name).join(', ')} (worktrees: runs/${record.id}/race/)`);
         const settled = await Promise.allSettled(slots.map(async (x) => {
-          const res = await invokeLane(x.lane, brief, { timeoutMs: 1000 * 60 * 30, override: Boolean(flags.override), context: flags.context, cwd: x.dir, mcpAgent: Boolean(flags['mcp-agent']), allowWrites: [x.dir] });
+          const res = await invokeLane(x.lane, brief, { timeoutMs: 1000 * 60 * 30, override: Boolean(flags.override), context: flags.context, cwd: x.dir, allowWrites: [x.dir] });
           return { ...x, res };
         }));
         const test = detectTestCommand(cwd);
@@ -545,7 +545,7 @@ stampUsage(record.id);
         if (skills) appendLog(record.id, `SKILLS:\n${skills}`);
         tasked = `${skills ? `${skills}\n\n` : ''}${mapSlice}\n\n${brief}`;
       } catch { tasked = `${mapSlice}\n\n${brief}`; }
-      const runBuilder = async (lane) => invokeLane(lane, tasked, { timeoutMs: 1000 * 60 * 30, override: Boolean(flags.override), context: flags.context, cwd, mcpAgent: Boolean(flags['mcp-agent']), allowWrites: lockSpecs(manifest, cwd), runId: record.id });
+      const runBuilder = async (lane) => invokeLane(lane, tasked, { timeoutMs: 1000 * 60 * 30, override: Boolean(flags.override), context: flags.context, cwd, allowWrites: lockSpecs(manifest, cwd), runId: record.id });
       let res;
       try {
         res = await runBuilder(builder);
@@ -558,14 +558,6 @@ stampUsage(record.id);
           builder = next;
           res = await runBuilder(builder);
         } else throw e;
-      }
-      if (res?.waiting) {
-        appendLog(record.id, `SLACK waiting: ${res.error || 'inbox'}`);
-        console.log(`slack · waiting · write the reply to inbox/${record.id}.txt then cadre go --resume ${record.id}`);
-        updateRun(record.id, { status: 'resumed-brief', verdict: { passed: false, summary: `waiting for slack reply inbox/${record.id}.txt` } });
-        stampUsage(record.id);
-        releaseLock(record.id, 'slack-wait');
-        return 3;
       }
       buildOutput = res.stdout || res.text || '';
       const { forContext } = await import('../frugal.js');
@@ -754,15 +746,23 @@ stampUsage(record.id);
   let verifyEv = null;
   if (test) {
     verifyRan = true;
-    try {
-      const { stdout } = await run(test.cmd, test.args, { cwd, timeout: 1000 * 60 * 10, maxBuffer: 1024 * 1024 * 16 });
-      verifyEv = { kind: 'command', label: test.label, by: 'verifier', command: `${test.cmd} ${test.args.join(' ')}`, argv: [test.cmd, ...test.args], exit: 0, output: stdout.slice(0, 4000) };
+    // INDEPENDENCE: the verifier runs the project test itself, in a process
+    // cadre spawned (pid recorded on the evidence). The builder never grades
+    // its own work; a missing by-field would not be independent either.
+    const { runCaptured } = await import('../gate.js');
+    const res = await runCaptured([test.cmd, ...test.args], { cwd, timeoutMs: 1000 * 60 * 10 });
+    verifyEv = {
+      kind: 'command', label: test.label, by: 'verifier',
+      command: `${test.cmd} ${test.args.join(' ')}`, argv: [test.cmd, ...test.args],
+      exit: res.exit, output: (res.stdout || res.stderr || '').slice(0, 4000),
+      cadre: { by: 'cadre', at: new Date().toISOString(), pid: res.pid, recorder: process.pid, how: 'spawn' },
+    };
+    if (res.ok) {
       console.log(`verifier · ${test.label} ✓`);
-      appendLog(record.id, `VERIFY ${test.label} exit 0:\n${stdout.slice(0, 4000)}`);
-    } catch (e) {
-      verifyEv = { kind: 'command', label: test.label, by: 'verifier', command: `${test.cmd} ${test.args.join(' ')}`, argv: [test.cmd, ...test.args], exit: e.code ?? 1, output: String(e.stdout || e.message).slice(0, 4000) };
-      console.error(`verifier · ${test.label} ✗ (exit ${e.code ?? 1})`);
-      appendLog(record.id, `VERIFY ${test.label} FAILED:\n${String(e.stdout || e.message).slice(0, 4000)}`);
+      appendLog(record.id, `VERIFY ${test.label} exit 0 (spawned pid ${res.pid}):\n${(res.stdout || '').slice(0, 4000)}`);
+    } else {
+      console.error(`verifier · ${test.label} ✗ (exit ${res.exit})`);
+      appendLog(record.id, `VERIFY ${test.label} FAILED (spawned pid ${res.pid}, exit ${res.exit}):\n${String(res.stdout || res.stderr || '').slice(0, 4000)}`);
     }
     await addEvidence(record.id, verifyEv);
   } else {
@@ -851,7 +851,14 @@ stampUsage(record.id);
     appendLog(record.id, `DONE-CONDITION: ${doneCheck.note}`);
     if (doneCheck.checked) console.log(`done · ${doneCheck.ok ? '✓' : '✗'} ${doneCheck.note}`);
   } catch (e) { appendLog(record.id, `DONE-CONDITION check error: ${String(e.message).slice(0, 200)}`); }
-  const gate = gateVerdict(cur, { cwd });
+  // THE GATE: cadre re-runs commands in processes it spawns, cross-checks
+  // diffs against the live worktree, re-checks artifacts, and fetches any
+  // http citations. Receipts are saved back into the record so the proof
+  // bundle carries them. Unstamped evidence is refused at the door.
+  const gate = await runGate(cur, {
+    cwd,
+    save: (patched) => updateRun(record.id, { evidence: patched.evidence }),
+  });
   if (gate.passed && meteredTokens > budgetTokens) {
     gate.passed = false;
     gate.failed.push({ family: 'budget', ok: false, label: 'token budget', detail: `${meteredTokens} > ${budgetTokens}` });
@@ -867,6 +874,8 @@ stampUsage(record.id);
 
   let reverifyOk = true;
   if (flags['re-verify'] !== false && gate.passed) {
+    // runGate already re-ran the commands in spawned processes (receipts on
+    // the evidence); this spot-check keeps the double-run honest.
     const reverified = await verifyCommands(cur, { cwd, max: 2 });
     for (const rv of reverified) {
       if (!rv.ok) {

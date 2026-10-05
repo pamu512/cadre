@@ -107,7 +107,7 @@ export async function chatLane(lane, messages, opts = {}) {
       await new Promise((r) => setTimeout(r, waitMs));
     }
     try {
-      const headers = { 'content-type': 'application/json', 'user-agent': 'cadre/0.2' };
+      const headers = { 'content-type': 'application/json', 'user-agent': 'cadre/0.3' };
       if (key) headers.authorization = `Bearer ${key}`;
       const payload = await postJson(url, {
         headers,
