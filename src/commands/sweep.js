@@ -45,27 +45,25 @@ function snapshot(id) {
 }
 
 export async function cmdSweep(args, flags) {
-  // FORGET: retract a disproven run's hand-memory claims, then regenerate
-  // every derived capability card from the surviving ledger. The ledger
-  // stays append-only; retracted verdicts stop counting everywhere.
+  // FORGET: one door, one engine — sweep --forget delegates to retractRun
+  // (the same engine behind `cadre retract`): run status, fold chains, parity
+  // claims, preference events, hand memory, and every derived cache regenerate
+  // from one retraction path. Duplicated cascade logic here would drift.
   if (flags.forget) {
     const id = String(flags.forget);
     if (!listRuns().some((r) => r.id === id)) { console.error(`no run ${id} under ${home()}`); return 1; }
-    const { retractHandRun } = await import('../invoke.js');
-    const { deriveHandCards } = await import('../derive.js');
-    const retracted = retractHandRun(id);
-    const cards = retracted.length ? deriveHandCards() : [];
-    audit({ kind: 'sweep-forget', run: id, retracted: retracted.length });
-    console.log(`run ${id}: ${retracted.length} hand claim(s) retracted${retracted.length ? `:\n  ${retracted.join('\n  ')}` : ''}`);
-    if (cards.length) console.log(`${cards.length} capability card(s) regenerated`);
-    return 0;
-  }
-  // CONSOLIDATE: regenerate derived memory from the ledgers (the honest
-  // version of "nightly dreams" — deterministic, no model in the loop).
-  if (flags.remember) {
-    const { deriveHandCards } = await import('../derive.js');
-    const cards = deriveHandCards();
-    console.log(cards.length ? `${cards.length} capability card(s) written under ${join(home(), 'hands-memory', 'derived')}` : 'no hand ledgers to derive from');
+    const { retractRun } = await import('../retract.js');
+    try {
+      const report = await retractRun(id, 'forgotten via sweep');
+      console.log(`run ${id} retracted (was ${report.priorStatus}) · ${report.stained.length} run(s) stained`);
+      const c = report.cascades || {};
+      console.log(`  hand-memory verdicts: ${c.handMemory || 0} · parity claims: ${c.parityClaims || 0} · preference events: ${c.preferences || 0}`);
+      if (c.recallIndex) console.log('  recall index rebuilt');
+      if (c.handStats) console.log(`  ${c.handStats} capability stat block(s) recomputed`);
+    } catch (e) {
+      console.error(`cadre: ${String(e.message).split('\n')[0]}`);
+      return 1;
+    }
     return 0;
   }
   // C6: --release frees stale ax registry claims (killed builds leave

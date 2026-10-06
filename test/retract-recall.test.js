@@ -35,24 +35,24 @@ function seedRun({ status = 'passed', brief = 'fix src/auth.js login bug', lane 
   return tryReadRun(r.id);
 }
 
-test('retract marks the run, records prior status and reason', () => {
+test('retract marks the run, records prior status and reason', async () => {
   const r = seedRun();
-  const report = retractRun(r.id, 'evidence was fabricated');
+  const report = await retractRun(r.id, 'evidence was fabricated');
   assert.equal(report.already, false);
   assert.equal(report.priorStatus, 'passed');
   const after = tryReadRun(r.id);
   assert.equal(after.status, 'retracted');
   assert.equal(after.retractReason, 'evidence was fabricated');
   // idempotent
-  const again = retractRun(r.id, 'again');
+  const again = await retractRun(r.id, 'again');
   assert.equal(again.already, true);
 });
 
-test('retraction stains runs that folded the retracted run, cascading', () => {
+test('retraction stains runs that folded the retracted run, cascading', async () => {
   const base = seedRun({ brief: 'create fixture file' });
   const child = seedRun({ brief: 'continue work', lane: 'lane-b', foldedFrom: base.id });
   const grandchild = seedRun({ brief: 'continue more work', lane: 'lane-c', foldedFrom: child.id });
-  const report = retractRun(base.id, 'pulled');
+  const report = await retractRun(base.id, 'pulled');
   assert.deepEqual(report.stained.sort(), [child.id, grandchild.id].sort());
   assert.equal(tryReadRun(child.id).status, 'stale');
   assert.equal(tryReadRun(grandchild.id).status, 'stale');
@@ -61,10 +61,10 @@ test('retraction stains runs that folded the retracted run, cascading', () => {
   assert.deepEqual(foldingDescendants(base.id).map((r) => r.id), [child.id]);
 });
 
-test('retracted/stale runs never count as bench history', () => {
+test('retracted/stale runs never count as bench history', async () => {
   const clean = seedRun({ brief: 'fix the failing test in ui component', lane: 'lane-h' });
   const pulled = seedRun({ brief: 'fix the failing test in ui component', lane: 'lane-h' });
-  retractRun(pulled.id, 'not evidence');
+  await retractRun(pulled.id, 'not evidence');
   const stats = historyFor([], ['tests']);
   const h = stats.get('lane-h::tests');
   assert.ok(h, 'lane-h must appear in bench history for the clean run');
@@ -72,9 +72,9 @@ test('retracted/stale runs never count as bench history', () => {
   assert.equal(h.passed, 1);
 });
 
-test('recall index excludes nothing settled, is queryable by file/lane/status', () => {
+test('recall index excludes nothing settled, is queryable by file/lane/status', async () => {
   const r = seedRun({ brief: 'edit src/router.js scoring' });
-  retractRun(r.id, 'pulled');
+  await retractRun(r.id, 'pulled');
   const rows = buildIndex();
   const retracted = rows.filter((x) => x.id === r.id);
   assert.equal(retracted.length, 1);
@@ -87,7 +87,7 @@ test('recall index excludes nothing settled, is queryable by file/lane/status', 
   assert.ok(queryIndex({ rows }, { lane: 'lane-a' }).length >= 1);
 });
 
-test('recall rebuilds to identical rows from the ledger alone', () => {
+test('recall rebuilds to identical rows from the ledger alone', async () => {
   const a = buildIndex();
   const b = buildIndex();
   assert.deepEqual(a, b); // pure derivation: same ledger, same index

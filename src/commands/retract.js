@@ -3,19 +3,19 @@
 // rebuilds the derived recall index so derived memory can't re-assert
 // what the ledger just pulled.
 import { retractRun } from '../retract.js';
-import { loadIndex } from '../recall.js';
 
 export async function cmdRetract(args, flags) {
   const id = args[0];
   if (!id || flags.help) {
     console.log('cadre retract <run-id> --why "<reason>"');
-    console.log('  marks the run retracted, stains runs that folded its evidence,');
-    console.log('  rebuilds the recall index. Retracted/stale runs never count as');
-    console.log('  routing history, bench history, or metrics.');
+    console.log('  the one retraction engine: marks the run, stains runs that folded its');
+    console.log('  evidence, pulls parity claims / preference events / hand-memory verdicts');
+    console.log('  citing it, and rebuilds every derived cache (recall index, hand cards).');
+    console.log('  Retracted/stale runs never count as routing history, bench history, or metrics.');
     return flags.help ? 0 : 1;
   }
   const reason = typeof flags.why === 'string' && flags.why ? flags.why : 'retracted by operator';
-  const report = retractRun(id, reason);
+  const report = await retractRun(id, reason);
   if (report.already) {
     console.log(`run ${id} already retracted (${report.reason}) - nothing to do`);
     return 0;
@@ -26,8 +26,13 @@ export async function cmdRetract(args, flags) {
   } else {
     console.log('  no runs folded this evidence - nothing stained');
   }
-  // derived memory: rebuild so the index reflects the retraction immediately
-  loadIndex({ rebuild: true });
-  console.log('  recall index rebuilt');
+  const c = report.cascades || {};
+  const parts = [];
+  if (c.parityClaims) parts.push(`${c.parityClaims} parity claim(s)`);
+  if (c.preferences) parts.push(`${c.preferences} preference event(s)`);
+  if (c.handMemory) parts.push(`${c.handMemory} hand-memory verdict(s)`);
+  console.log(parts.length ? `  cascades pulled: ${parts.join(', ')}` : '  no derived claims cited this run');
+  if (c.recallIndex) console.log('  recall index rebuilt');
+  if (c.handStats) console.log(`  ${c.handStats} capability stat block(s) recomputed`);
   return 0;
 }

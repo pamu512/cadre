@@ -7,6 +7,12 @@ import { listRuns, tryReadRun, updateRun, audit, appendLog, retractParityClaimsF
 export const RETRACTED = 'retracted';
 export const STALE = 'stale';
 
+// Direct descendants: runs that folded this run's evidence into themselves.
+export function foldingDescendants(id) {
+  return listRuns().filter((r) =>
+    (r.evidence || []).some((e) => e.foldedFrom === id));
+}
+
 // ONE retraction engine, many doors (cadre retract, sweep --forget): the run
 // is marked, fold descendants stained, and EVERY derived surface that cites it
 // is pulled - parity claims, preference events, hand-memory verdicts - then
@@ -66,5 +72,16 @@ export async function retractRun(id, reason = 'retracted by operator') {
       queue.push(child.id); // retraction cascades through fold chains
     }
   }
-  return { id, already: false, priorStatus, stained, reason };
+  // derived caches regenerate from the surviving ledger: rebuild IS the
+  // propagation for anything derived (it can never outlive its evidence).
+  try {
+    const { loadIndex } = await import('./recall.js');
+    loadIndex({ rebuild: true });
+    cascades.recallIndex = 'rebuilt';
+  } catch { /* index rebuild is best-effort */ }
+  try {
+    const { allHandStats } = await import('./derive.js');
+    cascades.handStats = allHandStats().length;
+  } catch { /* no hand ledgers */ }
+  return { id, already: false, priorStatus, stained, cascades, reason };
 }

@@ -26,9 +26,18 @@ export async function cmdLanes(flags) {
       stats.set(lane, cur);
     }
   }
+  // hands also carry their own memory ledger (provenance-linked claims):
+  // show the recency-weighted pass rate and claim count next to run history
+  const { handStats } = await import('../derive.js');
+  const handLedger = new Map();
+  for (const s of [handStats('sol'), handStats('terra')]) if (s.claims > 0) handLedger.set(s.hand, s);
   for (const l of lanes) {
     const st = stats.get(l.name);
-    if (st) l.history = `${st.passed}/${st.runs} passed`;
+    const hm = handLedger.get(l.name);
+    const parts = [];
+    if (st) parts.push(`${st.passed}/${st.runs} passed`);
+    if (hm) parts.push(`memory ${hm.passed}/${hm.claims} (w ${hm.weighted_pass_rate ?? '—'})`);
+    if (parts.length) l.history = parts.join(' · ');
   }
 
   if (flags.json) {

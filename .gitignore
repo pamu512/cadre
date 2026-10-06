@@ -3,3 +3,5 @@ node_modules/
 *.tmp
 supabase/.temp/
 docs/beyond-parity-runs.log
+.cadre/
+status-probe.txt
