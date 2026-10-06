@@ -24,7 +24,7 @@ import { cmdRecall } from '../src/commands/recall.js';
 // flags that take a value as the next token (--flag value); all others are boolean
 const VALUE_FLAGS = new Set([
   'impl', 'budget', 'context', 'timeout', 'why', 'retire', 'resume', 'clear', 'role', 'ref',
-  'quiet', 'set', 'provider', 'quota', 'reset', 'rollover', 'rail', 'lane', 'scope', 'done', 'lines', 'root', 'cwd', 'race', 'verify', 'until-proven', 'max-iter', 'gh-repo', 'accept-drift', 'window-hours', 'rpm', 'rps', 'status-url', 'file', 'limit', 'status',
+  'quiet', 'set', 'provider', 'quota', 'reset', 'rollover', 'rail', 'lane', 'scope', 'done', 'lines', 'root', 'cwd', 'race', 'verify', 'until-proven', 'max-iter', 'gh-repo', 'accept-drift', 'window-hours', 'rpm', 'rps', 'status-url', 'file', 'limit', 'status', 'forget', 'remember',
 ]);
 
 function parseArgv(argv) {
