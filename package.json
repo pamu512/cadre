@@ -11,7 +11,7 @@
     "node": ">=18"
   },
   "scripts": {
-    "test": "node --test"
+    "test": "node --test && node --experimental-test-module-mocks --test scripts/debate-judge.check.js"
   },
   "license": "MIT",
   "files": [

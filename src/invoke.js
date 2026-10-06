@@ -11,7 +11,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { homedir } from 'node:os';
-import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { chatLane, chatLaneAvailable, CHAT_KINDS } from './chatlane.js';
 
@@ -34,6 +34,10 @@ function handMemoryPath(name) {
   return join(process.env.CADRE_HOME || join(homedir(), '.cadre'), 'hands-memory', `${name}.jsonl`);
 }
 
+// hand ledger lines carry provenance: every remembered verdict is a claim
+// linked to the run that produced it (run id + evidence paths), so any
+// derived memory can be traced back to receipts, and a disproven run can
+// be retracted wholesale without touching the rest of the hand's history.
 function handLines(name) {
   try {
     return readFileSync(handMemoryPath(name), 'utf-8').trim().split('\n').filter(Boolean).map((line) => {
@@ -43,7 +47,7 @@ function handLines(name) {
 }
 
 export function handPrompt(lane, task) {
-  const lines = handLines(lane.name).filter((e) => Array.isArray(e.files));
+  const lines = handLines(lane.name).filter((e) => Array.isArray(e.files) && !e.retracted);
   const text = String(task);
   const overlap = lines.filter((e) => e.files.some((f) => text.includes(f) || text.includes(String(f).split('/').pop())));
   const picked = (overlap.length ? overlap : lines).slice(-5);
@@ -51,18 +55,39 @@ export function handPrompt(lane, task) {
   return [memory ? `previous runs:\n${memory}` : '', task].filter(Boolean).join('\n\n');
 }
 
-export function rememberHandOutcome(lane, { files = [], passed = false, critique = '', task = '' } = {}) {
+export function rememberHandOutcome(lane, { files = [], passed = false, critique = '', task = '', run = null, evidence = [] } = {}) {
   try {
     const p = handMemoryPath(lane.name);
     mkdirSync(join(p, '..'), { recursive: true });
     appendFileSync(p, JSON.stringify({
       at: new Date().toISOString(),
+      run: run ? String(run) : null,
+      evidence: (evidence || []).slice(0, 8).map(String),
       files: files.slice(0, 12).map(String),
       passed: Boolean(passed),
       critique: String(critique).slice(0, 160),
       task: String(task).slice(0, 180),
     }) + '\n');
   } catch { /* memory is best-effort */ }
+}
+
+// FORGET (the Muse retraction workflow, file-first): mark every claim from a
+// run as retracted — the line stays (append-only ledger), its verdict stops
+// counting. Derived memory regenerates from non-retracted lines only.
+export function retractHandRun(runId) {
+  const dir = join(process.env.CADRE_HOME || join(homedir(), '.cadre'), 'hands-memory');
+  let touched = [];
+  try { touched = readdirSync(dir).filter((f) => f.endsWith('.jsonl')); } catch { return []; }
+  const retracted = [];
+  for (const f of touched) {
+    const lines = handLines(f.replace(/\.jsonl$/, ''));
+    const out = lines.map((e) => {
+      if (e.run === runId && !e.retracted) { retracted.push(`${f.replace(/\.jsonl$/, '')}:${e.at}`); return { ...e, retracted: true, retracted_at: new Date().toISOString() }; }
+      return e;
+    });
+    if (retracted.length) writeFileSync(join(dir, f), out.map((e) => JSON.stringify(e)).join('\n') + '\n');
+  }
+  return retracted;
 }
 
 // split a command template honoring single/double quotes ({brief} may contain

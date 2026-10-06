@@ -24,11 +24,15 @@ export function classifyTask(brief) {
 
 // history: lane -> { runs, passed, tokens } filtered to runs whose brief
 // matched the given task classes
+// taskfit: retracted/stale runs are not evidence - a lane's bench history
+// must not credit or debit it from runs whose base was pulled.
+const STALE_STATUSES = ['retracted', 'stale'];
 export function historyFor(lanes, taskClasses) {
   const key = (lane, cl) => `${lane}::${cl}`;
   const stats = new Map();
   for (const r of listRuns()) {
     if (!r.roles || !r.brief) continue;
+    if (STALE_STATUSES.includes(r.status)) continue;
     const classes = classifyTask(r.brief);
     if (!classes.some((c) => taskClasses.includes(c))) continue;
     const passed = r.status === 'passed';

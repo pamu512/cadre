@@ -33,7 +33,7 @@ test('P0#5: cadre doctor runs and reports health with fix lines', async () => {
   assert.ok(/healthy|fix:/.test(r.stdout));
 });
 
-test('P0#2: MCP tools/list has go/sweep/watch/status, NOT pin; cadre_go defaults dry; unknown tool is a protocol error', async () => {
+test('P0#2: MCP tools/list has go/sweep/watch/status, NOT pin; cadre_go defaults dry; unknown tool is a protocol error', { timeout: 30000 }, async () => {
   const h = home('mcp2');
   const p = spawn('node', [join(ROOT, 'bin/cadre.js'), 'mcp'], { stdio: ['pipe', 'pipe', 'pipe'], env: h.env });
   let buf = ''; const replies = [];
@@ -42,14 +42,20 @@ test('P0#2: MCP tools/list has go/sweep/watch/status, NOT pin; cadre_go defaults
   // no dry flag, no live flag: must default to dry (routing text, no spend)
   p.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'cadre_go', arguments: { outcome: 'demo task' } } }) + '\n');
   p.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'cadre_nope', arguments: {} } }) + '\n');
-  await new Promise((r) => setTimeout(r, 2500));
-  p.kill();
+  p.stdin.end();
+  await new Promise((resolve) => {
+    const t = setTimeout(() => { try { p.kill(); } catch { /* already gone */ } resolve(); }, 20000);
+    p.on('close', () => { clearTimeout(t); resolve(); });
+  });
   const tools = replies.find((r) => r.id === 1)?.result?.tools?.map((t) => t.name) || [];
   for (const t of ['cadre_go', 'cadre_sweep', 'cadre_watch', 'cadre_status']) assert.ok(tools.includes(t), `${t} missing from tools/list`);
   assert.equal(tools.includes('cadre_pin'), false, 'cadre_pin must NOT be exposed over MCP');
   const go = replies.find((r) => r.id === 2);
-  assert.ok((go?.result?.content?.[0]?.text || '').length > 50, 'cadre_go (default dry) must return routing text');
-  assert.ok(/pipeline/.test(go?.result?.content?.[0]?.text || ''), 'dry routing text must show the pipeline');
+  const goText = go?.result?.content?.[0]?.text || '';
+  assert.equal(go?.result?.isError, undefined, 'dry go must not be a tool error: ' + goText.slice(0, 180));
+  assert.ok(!/unknown command/.test(goText), 'dry go must pass the go subcommand');
+  assert.ok(/cadre go \(dry\)/.test(goText), 'cadre_go (default dry) must return routing text');
+  assert.ok(/pipeline/.test(goText), 'dry routing text must show the pipeline');
   const unknown = replies.find((r) => r.id === 3);
   assert.ok(unknown?.error && unknown.error.code === -32601, 'unknown tool must be a JSON-RPC error');
 });

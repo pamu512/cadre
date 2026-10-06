@@ -81,10 +81,10 @@ export async function cmdDebate(args, flags) {
         { role: 'system', content: 'You judge technical debates. In at most 5 lines, name the winner and why.' },
         { role: 'user', content: `Question: ${q}\n\nLane A:\n${opening.A.slice(0, 1500)}\n\nLane B:\n${opening.B.slice(0, 1500)}` },
       ], { max_tokens: 300 });
-      judgeNote = res.text;
-      writeFileSync(join(dir, `judge-${judgeLane.name}.md`), res.text);
+      const judgeNote = typeof res.text === 'string' ? res.text : '';
+      writeFileSync(join(dir, `judge-${judgeLane.name}.md`), judgeNote);
       console.log(`\n--- judge (${judgeLane.name}) ---`);
-      console.log(res.text.replace(/^/gm, '  '));
+      console.log(judgeNote.replace(/^/gm, '  '));
     } catch (e) {
       console.log(`\njudge: ${judgeLane.name} failed (${e.message.split('\n')[0]}) - no judgment filed`);
     }

@@ -1,6 +1,6 @@
 # Beyond Parity — generated from the ledger
 
-Generated: 2026-10-02T23:11:44.807Z by `cadre metrics --report` — do not edit by hand; regenerate instead.
+Generated: 2026-10-06T08:41:07.922Z by `cadre metrics --report` — do not edit by hand; regenerate instead.
 
 ## Run ledger
 
@@ -9,6 +9,7 @@ Generated: 2026-10-02T23:11:44.807Z by `cadre metrics --report` — do not edit 
 - sweep recovery: **—** (0 swept) — target ≥ 90%, 0 silent losses
 - metered burn per passed run: **—** over 0 passed run(s)
 - median settle time: **—**
+
 
 ## Parity ledger
 

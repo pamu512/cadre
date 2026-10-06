@@ -38,13 +38,33 @@ export function choiceFor(role) {
   return c;
 }
 
+const HALF_LIFE_DAYS = 14;
+
+// Recency: an event's vote fades with a 14-day half-life, so a lane that was
+// good last month cannot outvote last night on stale wins. Raw counts stay
+// integers for the sample gates; only ranking uses the weighted rates.
+function ageWeight(at, now = Date.now()) {
+  const t = Date.parse(at);
+  if (!Number.isFinite(t)) return 1;
+  return Math.pow(0.5, Math.max(0, now - t) / (HALF_LIFE_DAYS * 24 * 60 * 60 * 1000));
+}
+
 function laneStats(events) {
   const counts = new Map();
+  const now = Date.now();
   for (const e of events) {
-    const cur = counts.get(e.lane) || { seen: 0, passed: 0, creep: 0 };
+    if (e.retracted) continue; // retracted evidence counts neither way
+    const w = ageWeight(e.at, now);
+    const cur = counts.get(e.lane) || { seen: 0, passed: 0, creep: 0, salient: 0, salientPassed: 0, wSeen: 0, wPassed: 0, wSalient: 0, wSalientPassed: 0 };
     cur.seen += 1;
-    if (e.passed) cur.passed += 1;
+    cur.wSeen += w;
+    if (e.passed) { cur.passed += 1; cur.wPassed += w; }
     if (e.creep) cur.creep += 1;
+    if (e.salience) {
+      cur.salient += 1;
+      cur.wSalient += w;
+      if (e.passed) { cur.salientPassed += 1; cur.wSalientPassed += w; }
+    }
     counts.set(e.lane, cur);
   }
   return counts;
@@ -56,17 +76,22 @@ function isDegrading(stats) {
 }
 
 // Healthiest lane with enough samples. A degrading lane is never a candidate.
+// Salience-weighted and recency-weighted: rank by salient pass rate first
+// (outcomes that carried weight - files landed, gates moved), then overall
+// weighted rate, then raw samples.
 function bestHabit(events) {
   const ranked = [...laneStats(events).entries()]
     .filter(([, s]) => s.seen >= MIN_SAMPLES && !isDegrading(s))
     .sort((a, b) => {
-      const rate = (s) => s.passed / s.seen;
+      const sal = (s) => (s.wSalient > 0 ? s.wSalientPassed / s.wSalient : -1);
+      if (sal(b[1]) !== sal(a[1])) return sal(b[1]) - sal(a[1]);
+      const rate = (s) => (s.wSeen > 0 ? s.wPassed / s.wSeen : 0);
       if (rate(b[1]) !== rate(a[1])) return rate(b[1]) - rate(a[1]);
       return b[1].seen - a[1].seen;
     });
   if (!ranked.length) return null;
   const [lane, s] = ranked[0];
-  return { lane, passed: s.passed, seen: s.seen, rate: s.passed / s.seen };
+  return { lane, passed: s.passed, seen: s.seen, rate: s.passed / s.seen, salient_rate: s.salient ? s.salientPassed / s.salient : null };
 }
 
 // Adopt a passing habit. Replace the current one only when it has enough
@@ -91,10 +116,14 @@ function evolveRole(prefs, role) {
     current.seen = best.seen;
     return;
   }
-  const cur = laneStats(events).get(current.lane) || { seen: 0, passed: 0, creep: 0 };
+  const cur = laneStats(events).get(current.lane) || { seen: 0, passed: 0, creep: 0, salient: 0, salientPassed: 0 };
   if (cur.seen < MIN_SAMPLES) return;
   const curRate = cur.passed / cur.seen;
-  if (!isDegrading(cur) && best.rate <= curRate) return;
+  // salience-aware displacement: a quiet incumbent (sal = -1) is displaced by
+  // any lane with a proven salient record, even at a lower overall rate.
+  const sal = (s) => (s.salient > 0 ? s.salientPassed / s.salient : -1);
+  const bestStats = laneStats(events).get(best.lane) || { salient: 0, salientPassed: 0 };
+  if (!isDegrading(cur) && sal(bestStats) <= sal(cur) && best.rate <= curRate) return;
   prefs.choices[role] = {
     lane: best.lane, at: new Date().toISOString(), source: 'habit',
     from: current.lane, passed: best.passed, seen: best.seen,
@@ -103,7 +132,7 @@ function evolveRole(prefs, role) {
 
 // An explicit steer (--role, a pin that was used) is remembered immediately.
 // Every outcome updates the counts, then a healthy habit can take the role.
-export function recordOutcome({ role, lane, source = 'fit', passed = false, creep = false, tokens = 0 } = {}) {
+export function recordOutcome({ role, lane, source = 'fit', passed = false, creep = false, tokens = 0, run = null, salience = false } = {}) {
   if (!role || !lane) return loadPrefs();
   const prefs = loadPrefs();
   prefs.events.push({
@@ -112,6 +141,8 @@ export function recordOutcome({ role, lane, source = 'fit', passed = false, cree
     passed: Boolean(passed),
     creep: Boolean(creep),
     tokens: Number(tokens) || 0,
+    run: run || undefined,
+    salience: Boolean(salience) || Boolean(creep) || undefined,
   });
   prefs.events = prefs.events.slice(-MAX_EVENTS);
   if (source === 'explicit' || source === 'pin') {
@@ -120,6 +151,27 @@ export function recordOutcome({ role, lane, source = 'fit', passed = false, cree
   evolveRole(prefs, role);
   save(prefs);
   return prefs;
+}
+
+// Retract every preference event derived from a given run (sweep cascade):
+// the run's outcome stops counting toward habits. Retraction is recorded, not
+// deleted - the event stays with passed/salience cleared and retracted:<why>,
+// so the history shows the lane WAS tried and the evidence was pulled.
+export function retractEventsForRun(runId, why = 'run retired') {
+  const prefs = loadPrefs();
+  let n = 0;
+  prefs.events = prefs.events.map((e) => {
+    if (e.run !== runId || e.retracted) return e;
+    n += 1;
+    return { ...e, passed: false, salience: undefined, retracted: String(why) };
+  });
+  if (n > 0) {
+    // habits may have changed under us - recompute per affected role
+    const roles = [...new Set(prefs.events.filter((e) => e.run === runId).map((e) => e.role))];
+    for (const role of roles) evolveRole(prefs, role);
+    save(prefs);
+  }
+  return n;
 }
 
 export function recordChoice(kind, value, { passed } = {}) {
@@ -192,7 +244,7 @@ export function resolveHabit(kind, requested, { override = false } = {}) {
 }
 
 function roleEvents(role, lane) {
-  return loadPrefs().events.filter((e) => e.role === role && (!lane || e.lane === lane));
+  return loadPrefs().events.filter((e) => e.role === role && !e.retracted && (!lane || e.lane === lane));
 }
 
 // Best other lane for this role, by pass rate, with at least 2 samples.

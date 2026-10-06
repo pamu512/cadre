@@ -45,6 +45,29 @@ function snapshot(id) {
 }
 
 export async function cmdSweep(args, flags) {
+  // FORGET: retract a disproven run's hand-memory claims, then regenerate
+  // every derived capability card from the surviving ledger. The ledger
+  // stays append-only; retracted verdicts stop counting everywhere.
+  if (flags.forget) {
+    const id = String(flags.forget);
+    if (!listRuns().some((r) => r.id === id)) { console.error(`no run ${id} under ${home()}`); return 1; }
+    const { retractHandRun } = await import('../invoke.js');
+    const { deriveHandCards } = await import('../derive.js');
+    const retracted = retractHandRun(id);
+    const cards = retracted.length ? deriveHandCards() : [];
+    audit({ kind: 'sweep-forget', run: id, retracted: retracted.length });
+    console.log(`run ${id}: ${retracted.length} hand claim(s) retracted${retracted.length ? `:\n  ${retracted.join('\n  ')}` : ''}`);
+    if (cards.length) console.log(`${cards.length} capability card(s) regenerated`);
+    return 0;
+  }
+  // CONSOLIDATE: regenerate derived memory from the ledgers (the honest
+  // version of "nightly dreams" — deterministic, no model in the loop).
+  if (flags.remember) {
+    const { deriveHandCards } = await import('../derive.js');
+    const cards = deriveHandCards();
+    console.log(cards.length ? `${cards.length} capability card(s) written under ${join(home(), 'hands-memory', 'derived')}` : 'no hand ledgers to derive from');
+    return 0;
+  }
   // C6: --release frees stale ax registry claims (killed builds leave
   // auto-claimed orphans that block re-runs until released)
   if (flags.release) {
@@ -77,6 +100,27 @@ export async function cmdSweep(args, flags) {
     updateRun(id, { status: 'retired', ended: new Date().toISOString(), verdict: { passed: false, summary: 'retired by sweep' } });
     audit({ kind: 'sweep-retire', run: id });
     console.log(`run ${id} retired (was ${run.status})`);
+    // CASCADE (forgetting pipeline): everything derived from this run is
+    // retracted with it - preference events stop counting toward habits, hand
+    // memory from this run is retracted, and parity claims citing this run
+    // are marked retracted. Derived state never outlives its evidence.
+    try {
+      const { retractEventsForRun } = await import('../preferences.js');
+      const n = retractEventsForRun(id, 'run retired by sweep');
+      if (n > 0) console.log(`  cascade · ${n} preference event(s) retracted`);
+    } catch { /* preferences ledger is best-effort */ }
+    try {
+      const { retractHandRun } = await import('../invoke.js');
+      if (typeof retractHandRun === 'function') {
+        const n = retractHandRun(id);
+        if (n > 0) console.log(`  cascade · ${n} hand-memory verdict(s) retracted`);
+      }
+    } catch { /* hand memory is best-effort */ }
+    try {
+      const { retractParityClaimsForRun } = await import('../store.js');
+      const n = retractParityClaimsForRun(id, 'run retired by sweep');
+      if (n > 0) console.log(`  cascade · ${n} parity claim(s) retracted`);
+    } catch { /* parity ledger is best-effort */ }
     return 0;
   }
   if (flags.resume) {

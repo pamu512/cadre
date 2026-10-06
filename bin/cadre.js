@@ -18,11 +18,13 @@ import { cmdInit } from '../src/commands/init.js';
 import { cmdDebate } from '../src/commands/debate.js';
 import { cmdPin } from '../src/commands/pin.js';
 import { cmdMcp } from '../src/commands/mcp.js';
+import { cmdRetract } from '../src/commands/retract.js';
+import { cmdRecall } from '../src/commands/recall.js';
 
 // flags that take a value as the next token (--flag value); all others are boolean
 const VALUE_FLAGS = new Set([
   'impl', 'budget', 'context', 'timeout', 'why', 'retire', 'resume', 'clear', 'role', 'ref',
-  'quiet', 'set', 'provider', 'quota', 'reset', 'rollover', 'rail', 'lane', 'scope', 'done', 'lines', 'root', 'cwd', 'race', 'verify', 'until-proven', 'max-iter', 'gh-repo', 'accept-drift', 'window-hours', 'rpm', 'rps', 'status-url',
+  'quiet', 'set', 'provider', 'quota', 'reset', 'rollover', 'rail', 'lane', 'scope', 'done', 'lines', 'root', 'cwd', 'race', 'verify', 'until-proven', 'max-iter', 'gh-repo', 'accept-drift', 'window-hours', 'rpm', 'rps', 'status-url', 'file', 'limit', 'status',
 ]);
 
 function parseArgv(argv) {
@@ -103,6 +105,8 @@ async function main() {
     case 'debate': return cmdDebate(_, flags);
     case 'pin': return cmdPin(_, flags);
     case 'mcp': return cmdMcp(_, flags);
+    case 'retract': return cmdRetract(_, flags);
+    case 'recall': return cmdRecall(_, flags);
     default: {
       console.error(`unknown command: ${command}\n`);
       cmdHelp();

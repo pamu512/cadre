@@ -4,6 +4,7 @@
 import {
   existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, appendFileSync, renameSync,
 } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { stampEvidence } from './gate.js';
@@ -155,4 +156,76 @@ export function loadMeters() {
   const p = join(home(), 'meters.json');
   if (!existsSync(p)) return [];
   try { return JSON.parse(readFileSync(p, 'utf-8')); } catch { return []; }
+}
+
+// ---- parity ledger with a supersede chain ------------------------------------
+// Each row is a claim: "behavior B against ref R was closed/open, cited by C."
+// When a later claim arrives for the same target+ref, it carries
+// `supersedes: <claim id>` pointing at the newest prior claim. Nothing is
+// rewritten (append-only); the chain is read forward through the ids, so
+// `cadre proof`/`metrics` can always answer "does this closure still stand,
+// or did a later verdict replace it?" instead of replaying every row.
+export function parityLedgerPath() { return join(home(), 'parity-ledger.jsonl'); }
+
+export function readParityLedger() {
+  const p = parityLedgerPath();
+  if (!existsSync(p)) return [];
+  return readFileSync(p, 'utf-8').split('\n').filter(Boolean)
+    .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+    .filter(Boolean);
+}
+
+export function appendParityClaim(entry) {
+  const rows = readParityLedger();
+  const target = String(entry.target || '').trim();
+  const ref = String(entry.ref || '');
+  // superseded ids are knowable only by scanning (the ledger is append-only;
+  // prior rows are never rewritten with a back-pointer)
+  const superseded = new Set(rows.filter((r) => r.supersedes).map((r) => r.supersedes));
+  const prior = [...rows].reverse().find((r) =>
+    r.id && String(r.target || '').trim() === target && String(r.ref || '') === ref && !superseded.has(r.id));
+  const id = 'c' + createHash('sha256').update(`${Date.now()}|${target}|${entry.verdict}|${process.pid}`).digest('hex').slice(0, 10);
+  const row = {
+    ...entry,
+    target,
+    ref,
+    id,
+    supersedes: prior && prior.id !== id ? prior.id : undefined,
+    ts: entry.ts || new Date().toISOString(),
+  };
+  mkdirSync(home(), { recursive: true });
+  appendFileSync(parityLedgerPath(), JSON.stringify(row) + '\n');
+  return row;
+}
+
+// Current standing claims: the newest claim per target+ref (chain heads).
+export function standingParityClaims() {
+  const superseded = new Set();
+  const rows = readParityLedger();
+  for (const r of rows) if (r.supersedes) superseded.add(r.supersedes);
+  return rows.filter((r) => !superseded.has(r.id));
+}
+
+// Retract every standing claim produced by a given run (sweep cascade).
+// Append-only: retraction files a new claim per target+ref carrying
+// verdict 'retracted' + superseding the run's prior claim, so the chain
+// records both the original verdict and its withdrawal.
+export function retractParityClaimsForRun(runId, why = 'run retired') {
+  const rows = readParityLedger();
+  const superseded = new Set(rows.filter((r) => r.supersedes).map((r) => r.supersedes));
+  const heads = rows.filter((r) => r.id && !superseded.has(r.id) && r.run === runId && r.verdict !== 'retracted');
+  let n = 0;
+  for (const h of heads) {
+    appendParityClaim({
+      run: 'sweep',
+      target: h.target,
+      ref: h.ref,
+      verdict: 'retracted',
+      evidence_count: 0,
+      citation: '',
+      reason: `${why}: claim withdrawn (was: ${String(h.verdict).slice(0, 120)})`,
+    });
+    n += 1;
+  }
+  return n;
 }

@@ -23,23 +23,30 @@ import {
 
 const run = promisify(execFile);
 
-function notePreferences(roles, flags, { passed, creep, tokens, planText = '', delta = [], critique = '', verified = null }) {
+function notePreferences(roles, flags, { passed, creep, tokens, planText = '', delta = [], critique = '', verified = null, runId = null }) {
+  const files = (delta || []).map((f) => String(f?.file || f)).filter(Boolean);
   for (const [role, lane] of Object.entries(roles || {})) {
     if (!lane) continue;
     const explicit = Boolean(flags.override) || (typeof flags.role === 'string' && flags.role.startsWith(`${role}=`));
     const rolePassed = scoreRole(role, { passed, planText, delta, critique, verified });
-    recordOutcome({ role, lane, source: explicit ? 'explicit' : 'fit', passed: rolePassed, creep: role === 'builder' ? creep : false, tokens });
+    // salience: this role's output actually carried weight in the run
+    const salient = role === 'planner' ? Boolean(planText) && files.length > 0
+      : role === 'builder' ? files.length > 0
+      : role === 'critic' ? Boolean(critique)
+      : role === 'verifier' ? verified != null
+      : Boolean(passed);
+    recordOutcome({ role, lane, source: explicit ? 'explicit' : 'fit', passed: rolePassed, creep: role === 'builder' ? creep : false, tokens, run: runId, salience: salient || creep });
   }
   if (typeof flags.scope === 'string') recordChoice('scope', String(flags.scope), { passed });
   if (flags.budget) recordChoice('budget', String(flags.budget), { passed });
 }
 
-async function rememberHands(byRole, { brief, delta, passed, critique }) {
+async function rememberHands(byRole, { brief, delta, passed, critique, runId = null, evidence = [] }) {
   const { rememberHandOutcome } = await import('../invoke.js');
   const files = (delta || []).map((f) => String(f?.file || f)).filter(Boolean);
   for (const lane of Object.values(byRole || {})) {
     if (lane?.invoke?.kind !== 'hand') continue;
-    rememberHandOutcome(lane, { files, passed, critique, task: brief });
+    rememberHandOutcome(lane, { files, passed, critique, task: brief, run: runId, evidence });
   }
 }
 
@@ -827,8 +834,8 @@ stampUsage(record.id);
       stampUsage(record.id);
       audit({ kind: 'run-end', run: record.id, status: 'rejected', creep });
       try { const { learnFromRun } = await import('../map.js'); learnFromRun(cwd, { files: delta, passed: false, lane: byRole.builder?.name }); } catch { /* map learns when it can */ }
-      try { notePreferences(record.roles, flags, { passed: false, creep: true, tokens: meteredTokens, planText, delta, critique: critiqueText, verified: verifyRan }); } catch { /* preference ledger is best-effort */ }
-      try { await rememberHands(byRole, { brief, delta, passed: false, critique: critiqueText }); } catch { /* hand memory is best-effort */ }
+      try { notePreferences(record.roles, flags, { passed: false, creep: true, tokens: meteredTokens, planText, delta, critique: critiqueText, verified: verifyRan, runId: record.id }); } catch { /* preference ledger is best-effort */ }
+      try { await rememberHands(byRole, { brief, delta, passed: false, critique: critiqueText, runId: record.id }); } catch { /* hand memory is best-effort */ }
       releaseLock(record.id, 'rejected-scope-creep');
       console.log(`\n✗ run ${record.id} REJECTED - work outside the scope lock`);
       return 1;
@@ -922,8 +929,11 @@ stampUsage(record.id);
     const { learnFromRun } = await import('../map.js');
     learnFromRun(cwd, { files: delta, passed: gate.passed, lane: byRole.builder?.name || null });
   } catch { /* a missing map never blocks the verdict */ }
-  try { notePreferences(record.roles, flags, { passed: gate.passed, creep: false, tokens: meteredTokens, planText, delta, critique: critiqueText, verified: verifyRan }); } catch { /* preference ledger is best-effort */ }
-  try { await rememberHands(byRole, { brief, delta, passed: gate.passed, critique: critiqueText }); } catch { /* hand memory is best-effort */ }
+  try { notePreferences(record.roles, flags, { passed: gate.passed, creep: false, tokens: meteredTokens, planText, delta, critique: critiqueText, verified: verifyRan, runId: record.id }); } catch { /* preference ledger is best-effort */ }
+  // every remembered verdict is a claim linked to this run: provenance for
+  // the hand ledger (see retractHandRun), evidence paths point at receipts
+  const evidencePaths = (record.evidence || []).slice(0, 8).map((e) => e.path || e.ref || e.command || e.label).filter(Boolean).map(String);
+  try { await rememberHands(byRole, { brief, delta, passed: gate.passed, critique: critiqueText, runId: record.id, evidence: evidencePaths }); } catch { /* hand memory is best-effort */ }
   console.log(`\n${gate.passed ? '✓' : '✗'} run ${record.id} ${gate.passed ? 'PROVEN' : `not proven - ${gate.summary}`}`);
   console.log(`  metered ${meteredTokens} of ${budgetTokens} token budget · proof: cadre proof ${record.id} · replay: cadre watch ${record.id}`);
   return gate.passed ? 0 : 1;

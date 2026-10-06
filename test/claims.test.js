@@ -490,3 +490,44 @@ test('quiet hours are inferred from a week of daytime proven runs', async () => 
     { verdict: { passed: true }, started: day(10, 1) },
   ]), null);
 });
+
+// provenance + forgetting: hand ledger claims link to runs, retraction
+// removes them from memory and derived cards, evidence is traceable.
+test('hand memory claims carry run provenance and can be retracted', async () => {
+  const h = home('hands-memory-prov');
+  const prev = process.env.CADRE_HOME;
+  process.env.CADRE_HOME = h.dir;
+  try {
+    const { rememberHandOutcome, handPrompt, retractHandRun } = await import(join(ROOT, 'src/invoke.js'));
+    const { deriveHandCards, explainClaim } = await import(join(ROOT, 'src/derive.js'));
+    const lane = { name: 'sol', invoke: { kind: 'hand' } };
+    rememberHandOutcome(lane, { files: ['a.js'], passed: true, critique: 'gate passed', task: 'fix a.js', run: 'r-0001', evidence: ['runs/r-0001/proof.json'] });
+    rememberHandOutcome(lane, { files: ['b.js'], passed: true, critique: 'gate passed', task: 'fix b.js', run: 'r-0002', evidence: ['runs/r-0002/proof.json'] });
+    // derived card counts both, cites both runs
+    deriveHandCards();
+    let card = readFileSync(join(h.dir, 'hands-memory', 'derived', 'sol.md'), 'utf-8');
+    assert.match(card, /passed: 2/);
+    assert.match(card, /r-0001/);
+    assert.match(card, /r-0002/);
+    // claim is explainable: verdict -> run -> evidence
+    const lines = readFileSync(join(h.dir, 'hands-memory', 'sol.jsonl'), 'utf-8').trim().split('\n').map((l) => JSON.parse(l));
+    const first = explainClaim('sol', lines[0].at);
+    assert.equal(first.run, 'r-0001');
+    assert.ok(first.evidence[0].includes('r-0001'));
+    // forget run r-0001: its claim stops counting, card regenerates
+    const retracted = retractHandRun('r-0001');
+    assert.equal(retracted.length, 1);
+    const mem = handPrompt(lane, 'fix a.js again').split('\n\nfix a.js again')[0]; // memory section only
+    assert.ok(!mem.includes('fix a.js')); // the retracted claim is not recalled
+    deriveHandCards();
+    card = readFileSync(join(h.dir, 'hands-memory', 'derived', 'sol.md'), 'utf-8');
+    assert.match(card, /passed: 1/);
+    assert.doesNotMatch(card, /r-0001\b(?!\/)/); // run id gone from provenance list
+    // ledger stays append-only: the retracted line is still on disk
+    const kept = readFileSync(join(h.dir, 'hands-memory', 'sol.jsonl'), 'utf-8').trim().split('\n');
+    assert.equal(kept.length, 2);
+    assert.equal(JSON.parse(kept[0]).retracted, true);
+  } finally {
+    if (prev) process.env.CADRE_HOME = prev; else delete process.env.CADRE_HOME;
+  }
+});

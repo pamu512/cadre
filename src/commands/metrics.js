@@ -1,10 +1,13 @@
 // metrics - beyond-parity B1 (PRD-v0.2): the §8 success-metric numbers,
 // computed from the local ledger ONLY. No invented data: every figure traces to
 // run records under $CADRE_HOME/runs; anything without data renders as "—".
-import { listRuns, runDir, home } from '../store.js';
+import { listRuns, runDir, home, standingParityClaims, readParityLedger } from '../store.js';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
+// settled = explicit allowlist, so retracted/stale runs stay visible in the
+// ledger but never count toward metrics (computing over pulled evidence
+// would re-assert it). Keep it an allowlist, never a blacklist.
 const SETTLED = ['passed', 'rejected', 'failed', 'retired', 'resumed-brief'];
 
 function median(nums) {
@@ -59,13 +62,18 @@ export async function cmdMetrics(args, flags) {
     const { writeFileSync, mkdirSync, readFileSync, existsSync } = await import('node:fs');
     const { join } = await import('node:path');
     const m = computeMetrics();
-    // parity ledger rows, if any
+    // parity ledger rows, if any. Only STANDING claims count (chain heads,
+    // not superseded/retracted history); the raw count is shown for honesty.
+    let ledgerNote = '';
     let parityRows = [];
     const pl = join(home(), 'parity-ledger.jsonl');
     if (existsSync(pl)) {
-      parityRows = readFileSync(pl, 'utf-8').split('\n').filter(Boolean).map((l) => {
-        try { return JSON.parse(l); } catch { return null; }
-      }).filter(Boolean);
+      const standing = standingParityClaims().filter((e) => e.verdict !== 'retracted');
+      const total = readParityLedger().length;
+      parityRows = standing;
+      if (total > standing.length) {
+        ledgerNote = `_ledger: ${standing.length} standing claim(s) of ${total} row(s) - ${total - standing.length} superseded/retracted and not counted_`;
+      }
     }
     const pct = (v) => (v == null ? '—' : (v * 100).toFixed(1) + '%');
     const md = [
@@ -81,6 +89,7 @@ export async function cmdMetrics(args, flags) {
       `- metered burn per passed run: **${m.passed_runs ? Math.round(m.metered_burn_per_passed_run) + ' tok' : '—'}** over ${m.passed_runs} passed run(s)`,
       `- median settle time: **${m.median_settle_seconds != null ? m.median_settle_seconds.toFixed(1) + 's' : '—'}**`,
       '',
+      ledgerNote,
       '## Parity ledger',
       '',
     ];

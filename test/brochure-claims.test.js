@@ -228,7 +228,10 @@ test('claim3: cadre_go defaults to dry; live returns a run id; cadre_status is r
   assert.equal(tools.includes('cadre_pin'), false, 'cadre_pin must not be exposed');
   const go = replies.find((r) => r.id === 2);
   const text = go?.result?.content?.[0]?.text || '';
-  assert.ok(/pipeline/.test(text), 'default (dry) go returns routing');
+  assert.equal(go?.result?.isError, undefined, 'dry go is a successful tool call: ' + text.slice(0, 180));
+  assert.ok(!/unknown command/.test(text), 'dry go must invoke the go command');
+  assert.ok(/cadre go \(dry\)/.test(text), 'default (dry) go returns routing');
+  assert.ok(/pipeline/.test(text), 'default (dry) go returns the pipeline');
   assert.ok(!go?.result?.structuredContent?.live, 'default go must not be live');
 });
 

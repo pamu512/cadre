@@ -250,7 +250,7 @@ async function callTool(name, args) {
     }
     // dry: `cadre go <outcome> --dry` through the sink - the flag is the spend
     // gate, not the absence of a live flag
-    const goArgs = [String(args.outcome || ''), '--dry'];
+    const goArgs = ['go', String(args.outcome || ''), '--dry'];
     if (args.scope) goArgs.push('--scope', String(args.scope));
     if (args.ax) goArgs.push('--ax');
     return cliTool(name, goArgs);

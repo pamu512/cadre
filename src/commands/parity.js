@@ -7,7 +7,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { existsSync, appendFileSync, mkdirSync, readFileSync, writeFileSync, readdirSync, unlinkSync } from 'node:fs';
-import { createRun, updateRun, appendLog, addEvidence, audit, home, runDir } from '../store.js';
+import { createRun, updateRun, appendLog, addEvidence, audit, home, runDir, appendParityClaim } from '../store.js';
 
 const run = promisify(execFile);
 const AX = process.env.CADRE_AX || join(homedir(), '.local/bin/ax');
@@ -85,8 +85,7 @@ export async function cmdParity(args, flags) {
     // ledger rows: closed behaviors get citations, open ones say why
     const ledgerPath = join(home(), 'parity-ledger.jsonl');
     mkdirSync(home(), { recursive: true });
-    for (const r of v.results) {
-      appendFileSync(ledgerPath, JSON.stringify({
+    const verifyRows = v.results.map((r) => appendParityClaim({
         ts: new Date().toISOString(),
         run: 'verify',
         target: r.behavior.slice(0, 200),
@@ -94,8 +93,7 @@ export async function cmdParity(args, flags) {
         verdict: r.closed ? `behavior-closed (${r.kind})` : 'behavior-open',
         evidence_count: r.closed ? 1 : 0,
         citation: r.citation || '',
-      }) + '\n');
-    }
+      }));
     console.log(`\nparity verify: ${v.closed}/${v.total} closed · ${v.open} open (ledger rows filed)`);
     return v.open === 0 ? 0 : 1;
   }
@@ -146,7 +144,9 @@ export async function cmdParity(args, flags) {
     mkdirSync(home(), { recursive: true });
     const fileLap = (iterNo, results, source) => {
       for (const r of results) {
-        appendFileSync(ledgerPath, JSON.stringify({
+        // claims go through appendParityClaim so each lap's verdict on a
+        // behavior supersedes the prior lap's claim (chain readable forward)
+        appendParityClaim({
           ts: new Date().toISOString(),
           run: `loop-${iterNo}`,
           target: r.behavior.slice(0, 200),
@@ -155,7 +155,7 @@ export async function cmdParity(args, flags) {
           evidence_count: r.closed ? 1 : 0,
           citation: r.citation || '',
           reason: r.closed ? '' : String(r.reason || '').slice(0, 300),
-        }) + '\n');
+        });
       }
     };
     const fileSummary = () => {
@@ -213,11 +213,11 @@ export async function cmdParity(args, flags) {
       console.log(`\nparity loop · ${spec.stretch.length} stretch item(s) PROPOSED (not in the contract; never built without your say-so):`);
       for (const st of spec.stretch.slice(0, 5)) console.log(`  ~ ${st.slice(0, 100)}`);
       for (const st of spec.stretch) {
-        appendFileSync(ledgerPath, JSON.stringify({
+        appendParityClaim({
           ts: new Date().toISOString(), run: 'stretch', target: st.slice(0, 200), ref,
           verdict: 'stretch-proposed', evidence_count: 0, citation: '',
           reason: 'beyond parity - proposed only, requires your approval to build',
-        }) + '\n');
+        });
       }
     } else if (beyond) {
       for (const b of spec.stretch) if (!parseCheck(b)) console.log(`parity loop · stretch not checkable, not built: ${b.slice(0, 120)}`);
@@ -444,9 +444,7 @@ export async function cmdParity(args, flags) {
   audit({ kind: 'parity-start', run: record.id, ref });
   // B6 parity ledger: this run's outcome gets appended to parity-ledger.jsonl
   const appendLedger = (verdict) => {
-    const ledgerPath = join(home(), 'parity-ledger.jsonl');
-    mkdirSync(home(), { recursive: true });
-    appendFileSync(ledgerPath, JSON.stringify({
+    appendParityClaim({
       ts: new Date().toISOString(),
       run: record.id,
       target: target.slice(0, 200),
@@ -454,7 +452,7 @@ export async function cmdParity(args, flags) {
       verdict,
       evidence_count: (record.evidence || []).length,
       citation: axRunOfVerdict,
-    }) + '\n');
+    });
   };
   let axRunOfVerdict = null;
 
