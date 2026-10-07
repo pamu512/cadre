@@ -72,9 +72,13 @@ UTILITIES
   lanes (holder pid gone => freed instantly); stale slots expire after
   AX_SLOT_TTL=600s).
 
-  ax lanes | ax doctor | ax last [n] | ax log <id> | ax open
+  ax lanes | ax doctor | ax last [n] | ax log <id> | ax open | ax status <id>
   ax stats                     completion health: debate completion rate, stall
                                stages, lane volumes/exit codes from history.tsv
+  ax bg <build|decide|lane> "<prompt>"   detached run for short-deadline callers
+                               (Grok Bot ~10s exec): prints a run id instantly;
+                               poll with ax status <id> (file-only, no lane
+                               occupied); full output via ax log <id>
 
 OPTIONS (lanes)
   -C, --cd <dir>     working directory        -t, --timeout <s>   per-lane timeout
@@ -810,24 +814,64 @@ $(tail -60 "$RUNS_DIR/$idC.log")" "$RUNS_DIR/$idE.log")
   } ;;
 
   bg)
-    # detached lane run for callers with short exec deadlines (Grok Bot daemon ~10s):
-    # returns a run id immediately; the lane completes independently; result lands in
-    # ~/.config/ax/runs/<id>.log + history.tsv. Check later: ax log <id> / ax last
+    # detached run for callers with short exec deadlines (Grok Bot daemon ~10s):
+    # accepts LANES or full pipelines (build/decide). Returns a run id immediately;
+    # the run completes independently; result lands in ~/.config/ax/runs/<id>.log
+    # + history.tsv + <id>.pid/<id>.done for ax status polling (no lane occupied
+    # by polling). Check later: ax status <id> / ax log <id> / ax last
     shift $((OPTIND-1)) 2>/dev/null || true
     LANE="${1:-}"; shift || true
-    [[ "$LANE" =~ ^(grok|glm|hermes|codex|cursor|autoclaw|grokbot)$ ]] || die "usage: ax bg <lane> [prompt...]"
+    [[ "$LANE" =~ ^(grok|glm|hermes|codex|cursor|autoclaw|grokbot|build|decide)$ ]] || die "usage: ax bg <build|decide|lane> [prompt...]"
     PROMPT="$(read_prompt "$@")"
     [[ -n "$PROMPT" ]] || die "empty prompt"
     BGID=$(new_id)
     LOGF="$RUNS_DIR/$BGID.log"
     # Survive caller sandbox group-kills (Grok Bot daemon kills lingering process
     # groups ~5s after command exit): launch via setpgid in a fresh group with all
-    # fds detached, so no close-event watchdog ever sees us.
+    # fds detached, so no close-event watchdog ever sees us. The inner bash writes
+    # its pid (for RUNNING polls) and a .done file with rc (for FINISHED polls).
     ( perl -e 'use POSIX qw(setpgid); setpgid(0,0) or die "setpgid: $!"; exec @ARGV' /bin/bash -c \
-        'LOGF="$1"; LANE="$2"; HIST="$3"; shift 3; "$0" "$LANE" "$*" > "$LOGF" 2>&1 < /dev/null; rc=$?; printf "%s\\t%s\\t%s\\tbg\\t%s\\n" "$(basename "$LOGF" .log)" "$LANE" "$rc" "$(date +%s)" >> "$HIST"; exit $rc' \
+        'LOGF="$1"; LANE="$2"; HIST="$3"; PIDF="${1%.log}.pid"; DONEF="${1%.log}.done"; shift 3; printf "%s\\n" "$$" > "$PIDF"; "$0" "$LANE" "$*" > "$LOGF" 2>&1 < /dev/null; rc=$?; printf "rc=%s ended=%s\\n" "$rc" "$(date +%s)" > "$DONEF"; printf "%s\\t%s\\t%s\\tbg\\t%s\\n" "$(basename "$LOGF" .log)" "$LANE" "$rc" "$(date +%s)" >> "$HIST"; exit $rc' \
         "$0" "$LOGF" "$LANE" "$AX_HOME/history.tsv" "$PROMPT" ) >/dev/null 2>&1 < /dev/null &
     disown 2>/dev/null || true
     echo "$BGID"
+    ;;
+
+  status)
+    # poll a bg run WITHOUT occupying any lane or queue slot: pure file inspection.
+    # exit codes: 0 RUNNING, 1 DONE (rc in .done), 2 unknown id. Print one line:
+    #   <id> RUNNING <kind> pid=<pid> <human age>s log-lines=<n> last: <tail>
+    #   <id> DONE rc=<rc> <human age>s log-lines=<n> last: <tail>
+    # -q suppresses the tail. Tail bytes are capped so a chatty build can't stall
+    # a 10s Grokbot exec window.
+    [[ -n "${1:-}" ]] || die "usage: ax status <run-id> [-q]"
+    STLOG="$RUNS_DIR/$1.log"; STDONE="$RUNS_DIR/$1.done"; STPID="$RUNS_DIR/$1.pid"
+    KIND=$(awk -F'\\t' -v id="$1" '$1==id {print $2; exit}' "$AX_HOME/history.tsv" 2>/dev/null)
+    if [[ -s "$STDONE" ]]; then
+      rc=$(sed -n 's/^rc=//p' "$STDONE" | head -1)
+      ended=$(sed -n 's/.*ended=//p' "$STDONE" | head -1)
+      age=$(( $(date +%s) - ${ended:-$(date +%s)} ))
+      lines=$(wc -l < "$STLOG" 2>/dev/null | tr -d ' ')
+      tail=""
+      [[ "${2:-}" == "-q" ]] || tail=$(tail -c 400 "$STLOG" 2>/dev/null | tr '\n' ' ' | tail -c 160)
+      echo "$1 DONE rc=${rc:-?} ${age}s log-lines=${lines:-0}${tail:+ last: $tail}"
+      exit 1
+    fi
+    if [[ -s "$STPID" ]]; then
+      pid=$(head -1 "$STPID")
+      if kill -0 "$pid" 2>/dev/null; then
+        age=$(( $(date +%s) - $(stat -f %m "$STPID") ))
+        lines=$(wc -l < "$STLOG" 2>/dev/null | tr -d ' ')
+        tail=""
+        [[ "${2:-}" == "-q" ]] || tail=$(tail -c 400 "$STLOG" 2>/dev/null | tr '\n' ' ' | tail -c 160)
+        echo "$1 RUNNING ${KIND:-bg} pid=$pid ${age}s log-lines=${lines:-0}${tail:+ last: $tail}"
+        exit 0
+      fi
+      # pid dead but no .done yet: crash race - treat as done-unknown
+      echo "$1 DONE rc=unknown (pid $pid gone, no .done - crashed?)"
+      exit 1
+    fi
+    echo "ax status: unknown run id $1 (no .pid/.done under $RUNS_DIR)" >&2; exit 2
     ;;
 
   work) work_cmd "$@" ;;

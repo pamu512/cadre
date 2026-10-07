@@ -56,6 +56,22 @@ itself.
 - `AX_SLOT_TTL` default lowered 1800s → 600s: stale slots age out in 10 min
   even if nothing touches the queue.
 
+## 2026-10-07 polling release
+
+`ax bg` previously accepted only lanes — Grokbot-initiated `build`/`decide`
+had to run foreground (dying to the daemon's exec deadline) and "polling"
+meant rereading logs. Now:
+
+- `ax bg <build|decide|lane> "<prompt>"` backgrounds FULL pipelines:
+  prints a run id instantly, survives group-kills, and writes `<id>.pid` +
+  `<id>.done` markers alongside the log.
+- `ax status <id> [-q]` polls by file inspection only — no lane or queue slot
+  is ever occupied by a status check. Exit codes: 0 RUNNING, 1 DONE
+  (rc included), 2 unknown. Output carries a capped tail so a chatty build
+  can't stall a 10s exec window. Verified live end-to-end on a real build:
+  RUNNING (gate → implement → finalize) → DONE rc=0, artifact on disk,
+  evidence gate green.
+
 ## Install / sync
 
 After editing `harness/ax` here, sync the live copy:

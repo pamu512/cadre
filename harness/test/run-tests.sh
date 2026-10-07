@@ -151,6 +151,49 @@ grep -qE "^$BGID[[:space:]]+glm[[:space:]]+[0-9]+[[:space:]]+bg" "$SB3/history.t
   && ok "bg: history row is tab-formatted with lane+rc" \
   || fail "bg: history row format (id=$BGID tsv=$(tail -1 "$SB3/history.tsv" 2>/dev/null))"
 
+# ---------- integration: ax status polls without touching lanes ------------
+# DONE case: fabricate a completed run (log + .pid + .done) and poll it
+SB4=$(mktemp -d)
+mkdir -p "$SB4/runs" "$SB4/logs" "$SB4/inbox" "$SB4/queue"
+SID="run-20990101-000000-1"
+echo "line one" > "$SB4/runs/$SID.log"; echo "line two: done stuff" >> "$SB4/runs/$SID.log"
+printf '424242\n' > "$SB4/runs/$SID.pid"
+printf 'rc=0 ended=%s\n' "$(date +%s)" > "$SB4/runs/$SID.done"
+OUT=$(AX_HOME="$SB4" "$AX" status "$SID" 2>/dev/null); RC=$?
+[[ $RC -eq 1 && "$OUT" == "${SID} DONE rc=0"* && "$OUT" == *"last: "*"done stuff"* ]] \
+  && ok "status: DONE row with rc + capped tail" || fail "status DONE (rc=$RC out=$OUT)"
+OUT=$(AX_HOME="$SB4" "$AX" status "$SID" -q 2>/dev/null)
+[[ "$OUT" != *"last:"* ]] \
+  && ok "status: -q suppresses tail" || fail "status -q (out=$OUT)"
+# RUNNING case: .done absent, pid alive (= this test's pid)
+SID2="run-20990101-000000-2"
+echo "working..." > "$SB4/runs/$SID2.log"
+printf '%s\n' "$$" > "$SB4/runs/$SID2.pid"
+OUT=$(AX_HOME="$SB4" "$AX" status "$SID2" 2>/dev/null); RC=$?
+[[ $RC -eq 0 && "$OUT" == "${SID2} RUNNING"*"pid=$$"* ]] \
+  && ok "status: RUNNING row with live pid" || fail "status RUNNING (rc=$RC out=$OUT)"
+# UNKNOWN case
+OUT=$(AX_HOME="$SB4" "$AX" status "run-20990101-000000-9" 2>/dev/null); RC=$?
+[[ $RC -eq 2 ]] \
+  && ok "status: unknown id exits 2" || fail "status unknown (rc=$RC)"
+# bg+status end-to-end: launch a stubbed bg run, poll RUNNING then DONE
+SB5=$(mktemp -d)
+mkdir -p "$SB5/runs" "$SB5/logs" "$SB5/inbox" "$SB5/queue"
+SLOW="$STUBS/slow-stub"
+printf '#!/usr/bin/env bash\nsleep 2\necho OK\n' > "$SLOW"; chmod +x "$SLOW"
+BID=$(AX_HOME="$SB5" AX_HERMES_BIN="$SLOW" "$AX" bg glm "health check" 2>/dev/null)
+sleep 0.5
+R1=$(AX_HOME="$SB5" "$AX" status "$BID" -q 2>/dev/null); RC1=$?
+sleep 3
+R2=$(AX_HOME="$SB5" "$AX" status "$BID" -q 2>/dev/null); RC2=$?
+[[ $RC1 -eq 0 && "$R1" == *"RUNNING"* && $RC2 -eq 1 && "$R2" == *"DONE rc=0"* ]] \
+  && ok "bg+status: RUNNING during run, DONE rc=0 after" \
+  || fail "bg+status e2e (r1='$R1' rc1=$RC1 r2='$R2' rc2=$RC2)"
+# polling must not create queue slots (lane-free polling)
+[[ -z $(find "$SB5/queue" -name 's.*' -type d 2>/dev/null) ]] \
+  && ok "status polls occupy no queue slots" \
+  || fail "status created queue slots ($(find "$SB5/queue" -name 's.*' | head -2))"
+
 echo
 echo "1..$((PASS+FAIL))"
 echo "# pass=$PASS fail=$FAIL"
