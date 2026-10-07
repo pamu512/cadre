@@ -41,6 +41,21 @@ classes loud, attributable, and recoverable:
 
 Fix prompt-rot: the cross-check prompt duplicated "Use web search" — now once.
 
+## 2026-10-07 slot-hygiene release
+
+Grokbot's local-exec daemon SIGKILLs process groups ~5s after the foreground
+command exits; ax's EXIT-trap slot release never runs, so killed runs leaked
+queue slots. Capacity-2 lanes then read "busy" for up to AX_SLOT_TTL=1800s
+(30 min), and only the next call on that SAME lane would reap them —
+Grokbot-retried runs queued, timed out (rc 124), and the failure reinforced
+itself.
+
+- `reap_dead_slots`: every `slot_acquire` now runs a global pass that frees
+  dead-pid slots on ALL lanes (verified live: one `ax glm` call reaped orphans
+  on grok + autoclaw simultaneously).
+- `AX_SLOT_TTL` default lowered 1800s → 600s: stale slots age out in 10 min
+  even if nothing touches the queue.
+
 ## Install / sync
 
 After editing `harness/ax` here, sync the live copy:

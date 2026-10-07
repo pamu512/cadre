@@ -67,8 +67,10 @@ UTILITIES
   ax work list [--repo R]                        see who is working on what
   ax work update --id W --status done|active|blocked · ax work release --id W
   Lanes queue when at capacity (hermes/glm 2, autoclaw 2, grok 3, cursor/codex 2;
-  override per lane: AX_Q_GLM etc; wait limit: AX_QUEUE_TIMEOUT=900; force-fail never -
-  queue timeout exits 124 and logs it).
+  override per lane: AX_Q_GLM etc; wait limit: AX_QUEUE_TIMEOUT=900; force-fail never —
+  queue timeout exits 124 and logs it). Any ax run first reaps dead slots on ALL
+  lanes (holder pid gone => freed instantly); stale slots expire after
+  AX_SLOT_TTL=600s).
 
   ax lanes | ax doctor | ax last [n] | ax log <id> | ax open
   ax stats                     completion health: debate completion rate, stall
@@ -287,7 +289,7 @@ AS
     echo "  System Settings > Privacy & Security > Accessibility > add /usr/bin/osascript (toggle ON)" >&2
     return 1
   fi
-  echo "[grokbot] planning brief submitted — check the Grok Bot window; optionally save its plan to $INBOX/plan-grokbot.md and re-run: ax decide <your-task>"
+  echo "[grokbot] planning brief submitted - check the Grok Bot window; optionally save its plan to $INBOX/plan-grokbot.md and re-run: ax decide <your-task>"
 }
 
 # ---------------- shared: autoclaw verdict ----------------
@@ -337,7 +339,8 @@ done
 
 # ---------------- lane concurrency queue: wait instead of fail ----------------
 # Per-lane slot dirs; when full, callers queue until a slot frees (AX_QUEUE_TIMEOUT,
-# default 900s). Stale slots (holder killed -9) auto-expire after AX_SLOT_TTL (1800s).
+# default 900s). Stale slots (holder killed -9)) auto-expire after AX_SLOT_TTL (600s
+# default; was 1800s - Grokbot group-kills leaked slots blocked lanes for 30min).
 lane_max() {
   case "$1" in
     hermes|glm) echo "${AX_Q_GLM:-2}" ;;      # zai rate-limits >2 parallel (evidence: 3x325s fails)
@@ -349,12 +352,30 @@ lane_max() {
     *)          echo 999 ;;
   esac
 }
+# Global dead-slot reaper: a slot whose holder pid is gone is freed immediately,
+# on EVERY lane (not just the one being acquired). Called at the top of every
+# slot_acquire so any ax invocation clears orphans left by process-group kills
+# (Grokbot's exec daemon SIGKILLs groups ~5s after exit; EXIT traps never run).
+reap_dead_slots() {  # $1=lane|all (reserved; currently always all)
+  local qbase="$AX_HOME/queue" slot hpid
+  [[ -d "$qbase" ]] || return 0
+  for slot in "$qbase"/*/s.*; do
+    [[ -d "$slot" ]] || continue
+    hpid=$(cat "$slot/pid" 2>/dev/null || true)
+    if [[ -n "$hpid" ]] && ! kill -0 "$hpid" 2>/dev/null; then
+      rm -rf "$slot" 2>/dev/null && echo "ax: reaped dead slot $slot (pid $hpid gone)" >&2
+    fi
+  done
+  return 0
+}
+
 slot_acquire() {  # $1=lane -> echoes slot path; returns 0 when acquired
+  reap_dead_slots all   # global pass first: any ax run clears orphans on every lane
   local lane="$1" max ttl waited=0
   max=$(lane_max "$lane")
   [[ "$max" -ge 999 ]] && return 1   # no limit -> no queueing
   local base="$AX_HOME/queue/$lane"; mkdir -p "$base"
-  ttl="${AX_SLOT_TTL:-1800}"
+  ttl="${AX_SLOT_TTL:-600}"
   while true; do
     local n=0 slot
     for slot in "$base"/s.*; do [[ -d "$slot" ]] && n=$((n+1)); done

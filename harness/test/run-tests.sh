@@ -26,6 +26,10 @@ if ! grep -q '^stall_exit()' "$FUNCS"; then
 fi
 # shellcheck disable=SC1090
 source "$FUNCS"
+# reap_dead_slots lives past the global-options cut; extract by name
+sed -n '/^reap_dead_slots()/,/^}/p' "$AX" >> "$FUNCS"
+# shellcheck disable=SC1090
+source "$FUNCS" 2>/dev/null || true
 
 # retry_nonempty: succeeds on first try
 OUT=$(retry_nonempty t /dev/null sh -c 'echo hello' ) && [[ "$OUT" == "hello" ]] \
@@ -60,6 +64,15 @@ DD=$(mktemp -d)
 OUT=$(stall_exit "$DD" "autoclaw-review" "empty after retries" 2>&1); RC=$?
 [[ $RC -eq 5 && -f "$DD/audit.md" ]] && grep -q "STALLED - autoclaw-review" "$DD/audit.md" \
   && ok "stall_exit writes audit.md and exits 5" || fail "stall_exit (rc=$RC)"
+
+# reap_dead_slots: orphans on ANY lane are freed by a global pass
+RQ=$(mktemp -d)/queue; mkdir -p "$RQ/glm/s.stale-glm" "$RQ/autoclaw/s.live-ac"
+printf '999999' > "$RQ/glm/s.stale-glm/pid"
+printf '%s' "$$" > "$RQ/autoclaw/s.live-ac/pid"
+OUT=$(AX_HOME="$RQ/.." reap_dead_slots all 2>&1)
+[[ ! -d "$RQ/glm/s.stale-glm" && -d "$RQ/autoclaw/s.live-ac" ]] \
+  && ok "reap_dead_slots frees dead-pid slots on any lane, keeps live ones" \
+  || fail "reap_dead_slots (out=$OUT stale-gone=$([[ -d $RQ/glm/s.stale-glm ]] && echo no || echo yes) live-kept=$([[ -d $RQ/autoclaw/s.live-ac ]] && echo yes || echo no))"
 
 # ---------- unit: run_grokbot prefers headless gbot --------------------------
 GBIN=$(mktemp -d)
