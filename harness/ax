@@ -50,6 +50,8 @@ IMPLEMENTATION
   ax build [prompt...]         plan gate -> implement -> codex finalize -> EVIDENCE GATE.
                                Nothing counts as done unless backed by checkable
                                evidence (command+output / files / artifacts / citations).
+                               One build per repo at a time (lock + live-pid check);
+                               agents INSIDE a build must edit files, never nest ax build.
                                Flags: --impl autoclaw|hermes|cursor (default: classified;
                                       UI tasks auto-route to autoclaw)
                                       --override (skip plan gate)
@@ -67,7 +69,7 @@ UTILITIES
   ax work list [--repo R]                        see who is working on what
   ax work update --id W --status done|active|blocked · ax work release --id W
   Lanes queue when at capacity (hermes/glm 2, autoclaw 2, grok 3, cursor/codex 2;
-  override per lane: AX_Q_GLM etc; wait limit: AX_QUEUE_TIMEOUT=900; force-fail never —
+  override per lane: AX_Q_GLM etc; wait limit: AX_QUEUE_TIMEOUT=900; force-fail never -
   queue timeout exits 124 and logs it). Any ax run first reaps dead slots on ALL
   lanes (holder pid gone => freed instantly); stale slots expire after
   AX_SLOT_TTL=600s).
@@ -700,6 +702,24 @@ $CC_G" | tee "$RUNS_DIR/$idJ.log" "$DDIR/judge.md")
       [[ "$AX_OVERRIDE" -eq 1 ]] || { echo "pass --override to build despite the active entries" >&2; exit 4; }
     fi
     WORKID=$(AX_WORK_AGENT=ax-build work_cmd claim --repo "$REG_REPO" --task "build: $PROMPT" --chat "ax build ($(date +%m-%d))")
+    # one build per repo: a nested/parallel re-invocation must fail fast, not deadlock.
+    # (Seen live 2026-10-07: an implement agent shelled out ANOTHER ax build for the
+    # same task; the outer build then waited 70+ min on its own duplicate.)
+    LOCK_DIR="$AX_HOME/locks"; mkdir -p "$LOCK_DIR"
+    REPO_KEY=$(printf '%s' "$REG_REPO" | cksum | cut -d' ' -f1)
+    BUILD_LOCK="$LOCK_DIR/build-$REPO_KEY.lock"
+    if [[ -e "$BUILD_LOCK" ]]; then
+      hpid=$(cat "$BUILD_LOCK" 2>/dev/null)
+      if [[ -n "$hpid" ]] && kill -0 "$hpid" 2>/dev/null; then
+        work_cmd release --id "$WORKID" >/dev/null 2>&1 || true
+        die "another ax build already runs for $REG_REPO (pid $hpid). If you ARE the agent inside that build: do NOT nest ax build - edit the files directly. Otherwise poll it (ax work list / ax status) or clear a dead lock: rm $BUILD_LOCK"
+      fi
+      echo "ax: clearing stale build lock (pid ${hpid:-?} gone)" >&2
+      rm -rf "$BUILD_LOCK"
+    fi
+    printf '%s' "$$" > "$BUILD_LOCK"
+    # NOTE: run_lane later replaces the EXIT trap (slot release), so the lock file
+    # may outlive this process; correctness comes from the live-pid check above.
     # 1) gate: approved plan (debate output) or headless plan + autoclaw verdict
     if [[ "$AX_OVERRIDE" -eq 0 ]]; then
       if [[ -s "$INBOX/plan-approved.md" ]]; then
@@ -742,11 +762,11 @@ $CC_G" | tee "$RUNS_DIR/$idJ.log" "$DDIR/judge.md")
     idI=$(new_id)
     case "$IMPL" in
       autoclaw)
-        run_lane autoclaw "Implement this approved plan. Target directory: $AX_CWD (use shell commands to read/write files there). This is a frontend/UI task: deliver a BEST-IN-CLASS UI - design craft, real content, clear hierarchy, working interactions in every state (hover/focus/active/empty/loading/error), responsive layout, accessible markup, polished visual detail. Minimal dependency footprint, maximum quality. BEYOND-PARITY RULE: if an opportunity exists to exceed the spec/reference measurably (performance, robustness, accessibility, UX), implement it ONLY with evidence (benchmark output, before/after numbers, test results); unevidenced improvements stay as noted opportunities under ## OPPORTUNITIES, never as claims. Plan: $PLAN" "$RUNS_DIR/$idI.log" >/dev/null || echo "WARN: autoclaw failed (ax log $idI)" >&2 ;;
+        run_lane autoclaw "Implement this approved plan. Target directory: $AX_CWD (use shell commands to read/write files there). This is a frontend/UI task: deliver a BEST-IN-CLASS UI — design craft, real content, clear hierarchy, working interactions in every state (hover/focus/active/empty/loading/error), responsive layout, accessible markup, polished visual detail. Minimal dependency footprint, maximum quality. ANTI-NESTING RULE: you are already INSIDE an ax build - NEVER invoke ax build/decide/bg again for this task; edit files and run tests directly yourself. BEYOND-PARITY RULE: if an opportunity exists to exceed the spec/reference measurably (performance, robustness, accessibility, UX), implement it ONLY with evidence (benchmark output, before/after numbers, test results); unevidenced improvements stay as noted opportunities under ## OPPORTUNITIES, never as claims. Plan: $PLAN" "$RUNS_DIR/$idI.log" >/dev/null || echo "WARN: autoclaw failed (ax log $idI)" >&2 ;;
       cursor)
-        run_lane cursor "Implement this approved plan in $AX_CWD. BEST-IN-CLASS bar: correct, idiomatic, performant, well-structured code with proper error handling. Scope to the plan, no corner-cutting. BEYOND-PARITY RULE: if an opportunity exists to exceed the spec/reference measurably (performance, robustness, accessibility, UX), implement it ONLY with evidence (benchmark output, before/after numbers, test results); unevidenced improvements stay as noted opportunities under ## OPPORTUNITIES, never as claims. $PLAN" "$RUNS_DIR/$idI.log" >/dev/null || echo "WARN: cursor failed (ax log $idI)" >&2 ;;
+        run_lane cursor "Implement this approved plan in $AX_CWD. BEST-IN-CLASS bar: correct, idiomatic, performant, well-structured code with proper error handling. Scope to the plan, no corner-cutting. ANTI-NESTING RULE: you are already INSIDE an ax build - NEVER invoke ax build/decide/bg again for this task; edit files and run tests directly yourself. BEYOND-PARITY RULE: if an opportunity exists to exceed the spec/reference measurably (performance, robustness, accessibility, UX), implement it ONLY with evidence (benchmark output, before/after numbers, test results); unevidenced improvements stay as noted opportunities under ## OPPORTUNITIES, never as claims. $PLAN" "$RUNS_DIR/$idI.log" >/dev/null || echo "WARN: cursor failed (ax log $idI)" >&2 ;;
       *)
-        run_lane hermes "Implement this approved plan in $AX_CWD. BEST-IN-CLASS bar: correct, secure, performant, well-tested, idiomatic, readable code. Scope to the plan (no drive-by redesign) but never cut corners. BEYOND-PARITY RULE: if an opportunity exists to exceed the spec/reference measurably (performance, robustness, accessibility, UX), implement it ONLY with evidence (benchmark output, before/after numbers, test results); unevidenced improvements stay as noted opportunities under ## OPPORTUNITIES, never as claims. $PLAN" "$RUNS_DIR/$idI.log" >/dev/null || echo "WARN: hermes failed (ax log $idI)" >&2 ;;
+        run_lane hermes "Implement this approved plan in $AX_CWD. BEST-IN-CLASS bar: correct, secure, performant, well-tested, idiomatic, readable code. Scope to the plan (no drive-by redesign) but never cut corners. ANTI-NESTING RULE: you are already INSIDE an ax build - NEVER invoke ax build/decide/bg again for this task; edit files and run tests directly yourself. BEYOND-PARITY RULE: if an opportunity exists to exceed the spec/reference measerably (performance, robustness, accessibility, UX), implement it ONLY with evidence (benchmark output, before/after numbers, test results); unevidenced improvements stay as noted opportunities under ## OPPORTUNITIES, never as claims. $PLAN" "$RUNS_DIR/$idI.log" >/dev/null || echo "WARN: hermes failed (ax log $idI)" >&2 ;;
     esac
     FIN_LANE=codex; [[ "$AX_CODEX_DISABLED" == 1 ]] && FIN_LANE=cursor
     # 3) finalize (codex, or cursor when codex disabled) - evidence-mandatory prompt

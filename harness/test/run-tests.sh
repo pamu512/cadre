@@ -194,6 +194,34 @@ R2=$(AX_HOME="$SB5" "$AX" status "$BID" -q 2>/dev/null); RC2=$?
   && ok "status polls occupy no queue slots" \
   || fail "status created queue slots ($(find "$SB5/queue" -name 's.*' | head -2))"
 
+# ---------- integration: build lock blocks nested/duplicate builds ------------
+SB6=$(mktemp -d)
+mkdir -p "$SB6/runs" "$SB6/logs" "$SB6/inbox" "$SB6/queue" "$SB6/locks" "$SB6/registry" "$SB6/bin"
+printf '{"entries":[]}' > "$SB6/registry/work.json"
+printf '#!/usr/bin/env bash\nexit 128\n' > "$SB6/bin/git"; chmod +x "$SB6/bin/git"
+KEY=$(printf '%s' '/tmp' | cksum | cut -d' ' -f1)
+# live holder (= this test's pid): duplicate build must refuse fast
+printf '%s' "$$" > "$SB6/locks/build-$KEY.lock"
+OUT=$(AX_HOME="$SB6" PATH="$SB6/bin:$PATH" AX_OVERRIDE=1 "$AX" build -C /tmp 'test task' 2>&1); RC=$?
+if [[ $RC -ne 0 ]] && grep -q "another ax build already runs" <<<"$OUT"; then
+  ok "build lock: duplicate build dies fast with guidance"
+else
+  fail "build lock did not trigger (rc=$RC out=$OUT)"
+fi
+# dead holder: lock cleared, build proceeds past the lock; stub ALL model binaries
+# so the run cannot spend or hang (it will fail later on stub output shape - fine)
+printf '999999' > "$SB6/locks/build-$KEY.lock"
+mkdir -p "$SB6/oc"
+printf '#!/usr/bin/env bash\ncat <<JSON\n{"payloads":[{"text":"## CONSENSUS: APPROVE"}]}\nJSON\n' > "$SB6/oc/node"; chmod +x "$SB6/oc/node"
+OUT2=$(AX_HOME="$SB6" PATH="$SB6/bin:$PATH" AX_OVERRIDE=1 AX_HERMES_BIN="$STUBS/hermes-stub" AX_CURSOR_BIN=/usr/bin/true AX_OC_NODE="$SB6/oc/node" AX_OC_CLI=/dev/null AX_EMPTY_RETRIES=0 "$AX" build -C /tmp 'test task' 2>&1); RC2=$?
+grep -q "clearing stale build lock" <<<"$OUT2" \
+  && ok "build lock: stale lock cleared automatically" \
+  || fail "build lock stale clearing (rc=$RC2 out=$OUT2)"
+
+# ---------- integration: build lock blocks nested/duplicate builds ------------
+SB6=$(mktemp -d)
+mkdir -p "$SB6/runs" "$SB6/logs" "$SB6/inbox" "$SB6/queue" "$SB6/locks" "$SB6/registry"
+printf '{"entries":[]}' > "$SB6/registry/work.json"
 echo
 echo "1..$((PASS+FAIL))"
 echo "# pass=$PASS fail=$FAIL"

@@ -56,7 +56,20 @@ itself.
 - `AX_SLOT_TTL` default lowered 1800s → 600s: stale slots age out in 10 min
   even if nothing touches the queue.
 
+## 2026-10-07 anti-nesting release
 ## 2026-10-07 polling release
+
+Live incident: the one-piece-looks build (19:43) had its implement agent shell
+out ANOTHER `ax build` for the same task at 20:25; the outer build then waited
+70+ min on its own duplicate while holding slots - the "stuck all day" state.
+
+- **Build lock**: one `ax build` per repo. A second invocation (nested or
+  parallel) dies fast with explicit guidance ("do NOT nest ax build - edit
+  files directly; poll with ax work list / ax status"). Stale locks with a
+  dead holder pid are cleared automatically.
+- **ANTI-NESTING RULE** added to all three implement-lane prompts: agents
+  inside a build are told to edit files and run tests themselves, never
+  re-invoke ax build/decide/bg.
 
 `ax bg` previously accepted only lanes — Grokbot-initiated `build`/`decide`
 had to run foreground (dying to the daemon's exec deadline) and "polling"
