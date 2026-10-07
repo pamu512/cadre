@@ -1,0 +1,56 @@
+# Vendored `ax` harness
+
+This directory vendors the live consensus harness (`~/.config/ax/ax`, symlinked
+from `~/.local/bin/ax`) into the repo so its behaviour is version-controlled,
+tested, and reviewable alongside the `cadre` CLI that drives it.
+
+- `ax` — the harness itself (bash). The installed copy is a symlink target at
+  `~/.config/ax/ax`; sync after edits (see `test/sync-install.sh`).
+- `policy.md` — model-routing constitution (research table + cost ladder).
+  Kept in sync with `~/.config/ax/policy.md`.
+- `test/run-tests.sh` — unit + sandboxed integration tests. Unit parts stub the
+  lanes; no model spend. Run: `bash test/run-tests.sh`.
+
+## 2026-10-07 robustness release
+
+Measured on real history: 31/55 debates stalled with no audit trail; 25 of
+them died before any position was written (empty lane replies cascading into
+debate with empty positions). This release makes every one of those failure
+classes loud, attributable, and recoverable:
+
+1. **Empty-reply guard** (`retry_nonempty`): decide's lane calls (autoclaw
+   review, grok plan/rebuttal, cross-checks) retry once on empty/failed output,
+   log every empty attempt into the run log, then fail loudly.
+2. **Stall audits** (`stall_exit`): any un-recoverable stage writes
+   `outcome: STALLED - <stage>` into the debate dir's `audit.md` and exits 5 —
+   no more silent deaths. `ax stats` counts these.
+3. **Per-task plan seeding**: `ax decide`/`ax build` only seed from
+   `plan-grokbot.md` / `plan-approved.md` when the file's first `PLAN:` line
+   matches the current task; stale plans are parked to `*.stale-<ts>.md`.
+   Cross-task plan inheritance is gone.
+4. **Headless grokbot lane**: `run_grokbot` delivers via `gbot send` (patched
+   grok-bot-cli, gateway descriptor v3) with verified delivery, falling back to
+   GUI keystrokes only when the CLI is unavailable (`AX_GROKBOT_MODE=gui`
+   forces GUI; `AX_GROKBOT_TARGET` picks another bot).
+5. **`ax stats`**: debate completion rate, stall stages, lane volumes and
+   nonzero-exit counts from `history.tsv`.
+6. **`ax bg` history rows** are now tab-formatted with lane + exit code
+   (previously free-text), so `ax stats`/`ax last` parse them.
+7. **Binary overrides** for testability: `AX_HERMES_BIN`, `AX_CURSOR_BIN`,
+   `AX_CODEX_BIN`, `AX_OC_NODE`, `AX_OC_CLI`, `AX_AC_RT`.
+
+Fix prompt-rot: the cross-check prompt duplicated "Use web search" — now once.
+
+## Install / sync
+
+After editing `harness/ax` here, sync the live copy:
+
+```bash
+bash harness/test/sync-install.sh   # backs up ~/.config/ax/ax, copies, chmods
+```
+
+Or manually:
+
+```bash
+cp harness/ax ~/.config/ax/ax && chmod +x ~/.config/ax/ax
+```

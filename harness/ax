@@ -1,0 +1,855 @@
+#!/usr/bin/env bash
+# ax - multi-agent harness: grokbot+autoclaw (consensus orchestrators),
+#       cursor+hermes (implementation), codex (edits/tests/run).
+# Install: ~/.config/ax/ax  |  symlink: ~/.local/bin/ax
+set -uo pipefail
+
+AX_HOME="${AX_HOME:-$HOME/.config/ax}"
+LOG_DIR="$AX_HOME/logs"; RUNS_DIR="$AX_HOME/runs"; INBOX="$AX_HOME/inbox"
+mkdir -p "$LOG_DIR" "$RUNS_DIR" "$INBOX"
+
+HERMES_VENV="${AX_HERMES_BIN:-$HOME/.hermes/hermes-agent/venv/bin/hermes}"
+# Codex lane disabled by default (Ollama gateway down, 2026-10-06). Set AX_CODEX_DISABLED=0 to re-enable.
+AX_CODEX_DISABLED="${AX_CODEX_DISABLED:-1}"
+CODEX_BIN="${AX_CODEX_BIN:-/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex}"
+CURSOR_BIN="${AX_CURSOR_BIN:-$HOME/.local/bin/cursor-agent}"
+AC_RT="${AX_AC_RT:-$HOME/Library/Application Support/autoclaw/embedded-gateway-runtime/9584763361928bf3}"
+OC_NODE="${AX_OC_NODE:-$AC_RT/node/node}"
+OC_CLI="${AX_OC_CLI:-$AC_RT/gateway/openclaw/openclaw.mjs}"
+# cost tier: internal one-word harness calls use flash (9x cheaper, see policy.md)
+AX_FAST_MODEL="${AX_FAST_MODEL:-zai/glm-5.3-flash}"
+# Grok family runs on Cursor (subscription headless): grok-4.7/4.6/4.5 low..xhigh ±fast.
+# Hermes/zai carries the GLM family. See policy.md.
+AX_GROK_MODEL="${AX_GROK_MODEL:-grok-4.7-high}"
+AX_GROK_FAST="${AX_GROK_FAST:-grok-4.7-medium-fast}"
+
+usage() {
+  cat <<'EOF'
+ax - consensus-orchestrated multi-agent harness
+
+ORCHESTRATION (grokbot + autoclaw, joint consensus required)
+  ax decide [prompt...]        ADVERSARIAL DEBATE: grokbot plans -> autoclaw agrees
+                               or files a structured counter (POSITION / REASONING /
+                               COMPROMISES-OK / NON-NEGOTIABLES / EVIDENCE). On
+                               disagreement each side defends with citations, both
+                               sides cross-check the other's evidence for fabrications,
+                               fact-grounded scoring picks the winner (fabrications
+                               sink claims). Audit trail in ~/.config/ax/debate/.
+                               Needs ~/.config/ax/inbox/plan-grokbot.md (grokbot GUI
+                               or your paste). --override forces approval.
+  ax plan [prompt...]          submit planning brief to grokbot only
+  ax review <path|prompt>      autoclaw reviews plan/code, gives ## CONSENSUS verdict
+  ax override                  re-run last decide with forced approval
+
+MODEL ROUTING (research table in ~/.config/ax/policy.md)
+  ax model                     show GLM-vs-Grok research summary + routing rules
+  ax model glm|grok            show best model for a family and which lane serves it
+  ax grok --model zai/glm-5.2  pin any zai model on hermes lanes (--model pass-through)
+
+IMPLEMENTATION
+  ax build [prompt...]         plan gate -> implement -> codex finalize -> EVIDENCE GATE.
+                               Nothing counts as done unless backed by checkable
+                               evidence (command+output / files / artifacts / citations).
+                               Flags: --impl autoclaw|hermes|cursor (default: classified;
+                                      UI tasks auto-route to autoclaw)
+                                      --override (skip plan gate)
+
+LANES (direct)
+  ax grok      Grok models via Cursor headless (grok-4.7/4.6/4.5; -m to pin,
+               e.g. -m grok-4.7-xhigh; AX_GROK_MODEL to change default)
+  ax glm       GLM via Hermes profile grok (same as before)
+  ax hermes|codex|cursor|autoclaw|grokbot [prompt...]
+
+UTILITIES
+  ax triage [prompt...]        classify -> route (orchestrator/impl/editor/ops)
+  ax chat                      interactive grok session (Hermes)
+  ax work claim --repo R --task T [--chat C]   register work (registry: who's on what)
+  ax work list [--repo R]                        see who is working on what
+  ax work update --id W --status done|active|blocked · ax work release --id W
+  Lanes queue when at capacity (hermes/glm 2, autoclaw 2, grok 3, cursor/codex 2;
+  override per lane: AX_Q_GLM etc; wait limit: AX_QUEUE_TIMEOUT=900; force-fail never -
+  queue timeout exits 124 and logs it).
+
+  ax lanes | ax doctor | ax last [n] | ax log <id> | ax open
+  ax stats                     completion health: debate completion rate, stall
+                               stages, lane volumes/exit codes from history.tsv
+
+OPTIONS (lanes)
+  -C, --cd <dir>     working directory        -t, --timeout <s>   per-lane timeout
+  -c, --context <f>  attach file as context    -i, --stdin        read prompt from stdin
+  -w, --web          grok/hermes: web toolset  --model <m>        model override
+  --continue         resume last session       --plan             cursor: plan mode
+EOF
+}
+
+ts() { date +%Y%m%d-%H%M%S; }
+new_id() { echo "run-$(ts)-$RANDOM"; }
+die() { echo "ax: $*" >&2; exit 1; }
+
+# ---------------- empty-reply guard ----------------
+# Lane calls (autoclaw/grok) sometimes return empty output under load - JSON
+# extract fails, gateway hiccups, timeouts. Downstream code then cascaded into
+# debate with empty positions and died silently (31/55 debates stalled that way).
+# retry_nonempty <name> <logfile> <fn> [fn-args...]: invokes <fn> up to
+# AX_EMPTY_RETRIES+1 (default 2) times until it returns rc=0 AND non-blank
+# output; echoes the winning output. Every empty attempt is appended to logfile
+# so post-mortems name the stage. Returns 1 (loud) when still empty.
+retry_nonempty() {
+  local name="$1" logfile="$2" fn="$3"; shift 3
+  local attempt=1 out rc=1 tries=$(( ${AX_EMPTY_RETRIES:-1} + 1 ))
+  while (( attempt <= tries )); do
+    out=$("$fn" "$@" < /dev/null)
+    rc=$?
+    if [[ $rc -eq 0 && -n "${out// }" ]]; then printf '%s' "$out"; return 0; fi
+    echo "### empty-reply guard: $name attempt $attempt/$tries rc=$rc empty ($(date))" >> "$logfile"
+    echo "ax: $name attempt $attempt/$tries empty or failed (rc=$rc)$( (( attempt < tries )) && echo ' - retrying' || echo ' - giving up' )" >&2
+    attempt=$((attempt+1))
+  done
+  return 1
+}
+
+# stall_exit <de Dir> <stage> [detail] - write an honest audit row and exit 5.
+# Every silent stall this replaces produced no audit.md at all.
+stall_exit() {
+  local ddir="$1" stage="$2" detail="${3:-}"
+  {
+    echo "# debate audit - $(date)"
+    echo "outcome: STALLED - $stage${detail:+ - $detail}"
+    echo "DECISION: NONE - fix the lane (ax doctor / ax log <id>) and re-run ax decide"
+  } | tee -a "$ddir/audit.md" >&2
+  exit 5
+}
+
+read_prompt() {
+  local prompt="${*:-}"
+  if [[ -n "${AX_STDIN:-}" ]]; then prompt="$(cat; printf '\n%s' "$prompt")"; fi
+  if [[ -n "${AX_CONTEXT:-}" ]]; then
+    prompt="--- CONTEXT FILE: ${AX_CONTEXT} ---$(printf '\n')$(cat "$AX_CONTEXT")$(printf '\n--- END CONTEXT ---\n\n')${prompt}"
+  fi
+  printf '%s' "$prompt"
+}
+
+# ---------------- lane runners ----------------
+run_grok() {
+  local model="${AX_MODEL:-}"
+  [[ -n "${AX_FAST:-}" && -z "$model" ]] && model="$AX_FAST_MODEL"
+  local extra=()
+  [[ -n "$model" ]] && extra+=(-m "$model")
+  [[ -n "${AX_WEB:-}" ]] && extra+=(-t web)
+  if [[ -n "${AX_CONTINUE:-}" ]]; then
+    "$HERMES_VENV" -p grok ${extra[@]+"${extra[@]}"} --continue "$1" < /dev/null
+  else
+    "$HERMES_VENV" -p grok ${extra[@]+"${extra[@]}"} -z "$1" < /dev/null
+  fi
+}
+
+run_hermes() {
+  local args=()
+  if [[ -n "${AX_MODEL:-}" ]]; then args+=("-m" "$AX_MODEL"); fi
+  if [[ -n "${AX_WEB:-}" ]]; then args+=("-t" "web"); fi
+  if [[ -n "${AX_CONTINUE:-}" ]]; then args+=("--continue"); else args+=("-z"); fi
+  "$HERMES_VENV" "${args[@]}" "$1" < /dev/null
+}
+
+run_grok_model() {  # Grok family via Cursor headless (capturable text)
+  local model="${AX_MODEL:-$AX_GROK_MODEL}"
+  [[ -n "${AX_FAST:-}" ]] && model="$AX_GROK_FAST"
+  local extra=(-p --trust --output-format text --model "$model")
+  [[ "${AX_CURSOR_PLAN:-0}" == "1" ]] && extra+=(--mode plan)
+  local out rc
+  out=$( ( cd "$AX_CWD" && timeout-poly "${AX_GROK_TIMEOUT:-240}" "$CURSOR_BIN" ${extra[@]+"${extra[@]}"} "$1" ) 2>&1 ) && rc=0 || rc=$?
+  if [[ $rc -ne 0 || -z "${out// }" ]]; then
+    echo "ax: grok-on-cursor failed (rc=$rc) - falling back to GLM (zai/glm-5.3) for this call" >&2
+    out=$(run_grok "$1") && rc=0 || rc=$?
+  fi
+  printf '%s' "$out"
+  return $rc
+}
+
+timeout-poly() {  # portable timeout: secs cmd...
+  local s="$1"; shift
+  if command -v gtimeout >/dev/null; then gtimeout "$s" "$@"; else perl -e 'alarm shift; exec @ARGV' "$s" "$@"; fi
+}
+
+# retryable prompt fns (used via retry_nonempty from decide/build)
+run_grok_plan() {
+  run_grok_model "PLAN THIS TASK. Reply with a numbered plan only, prefixed 'PLAN:'. Task: $1"
+}
+run_grok_pos() {
+  run_grok_model "You are the Grok-side orchestrator. Your counterpart (AutoClaw) disagrees with your plan and produced the COUNTER-POSITION below. Defend or amend the ORIGINAL PLAN. Reply EXACTLY:
+## POSITION: <the plan you now stand behind, numbered steps>
+## REASONING: <why it beats the counter-position>
+## COMPROMISES-OK: <what you can concede>
+## NON-NEGOTIABLES: <what you cannot accept, and why>
+## EVIDENCE: <numbered; each item: claim - real source title/URL. Only cite sources that actually exist; they will be fact-checked.>
+TASK: $1
+
+ORIGINAL PLAN:
+$2
+
+COUNTER-POSITION:
+$3"
+}
+
+run_autoclaw_crosscheck() {
+  run_autoclaw "Fact-check the opposing orchestrator's EVIDENCE. Use web search to confirm each source exists and supports its claim. If no evidence was provided, reply '0: NO EVIDENCE'. Reply one line per item exactly: '<n>: VERIFIED <source found>' or '<n>: FABRICATED <why>' or '<n>: UNVERIFIABLE <why>'. Evidence list:
+$1"
+}
+
+run_grok_crosscheck() {
+  run_grok_model "Fact-check the opposing orchestrator's EVIDENCE. Use web search to confirm each source exists and supports its claim. If no evidence was provided, reply '0: NO EVIDENCE'. Reply one line per item exactly: '<n>: VERIFIED <source found>' or '<n>: FABRICATED <why>' or '<n>: UNVERIFIABLE <why>'. Evidence list:
+$1"
+}
+
+run_codex() {
+  local extra=(--cd "$AX_CWD" --skip-git-repo-check --approve-for-me)
+  [[ -n "${AX_MODEL:-}" ]] && extra+=(-m "$AX_MODEL")
+  if [[ -n "${AX_CONTINUE:-}" ]]; then
+    "$CODEX_BIN" exec resume --last ${extra[@]+"${extra[@]}"} "$1" < /dev/null 2>/dev/null || "$CODEX_BIN" exec ${extra[@]+"${extra[@]}"} "$1" < /dev/null
+  else
+    "$CODEX_BIN" exec ${extra[@]+"${extra[@]}"} "$1" < /dev/null
+  fi
+}
+
+run_cursor() {
+  local extra=(--trust --output-format text)
+  [[ "${AX_CURSOR_PLAN:-}" == 1 ]] && extra+=(--mode plan)
+  ( cd "$AX_CWD" && "$CURSOR_BIN" -p ${extra[@]+"${extra[@]}"} "$(printf 'Working dir: %s\n\n%s' "$AX_CWD" "$1")" < /dev/null )
+}
+
+run_autoclaw() {
+  # Queue EVERY autoclaw call (decide/build internals call this directly and used to
+  # bypass the lane queue, producing empty reviews on a busy Mac). Wait, don't fail.
+  local OC_SLOT="" qrc=0
+  OC_SLOT=$(slot_acquire autoclaw) || qrc=$?
+  if [[ $qrc -eq 2 ]]; then
+    echo "ax: autoclaw queue timeout after ${AX_QUEUE_TIMEOUT:-900}s (busy gateway)" >&2
+    return 124
+  fi
+  # Pin AutoClaw's state dir: external callers (Grok Bot daemon, cron, cloud agents)
+  # run without AutoClaw's env; without this the CLI falls back to ~/.openclaw
+  # (vanilla OpenClaw, no zai auth) and fails with missing openai key.
+  OPENCLAW_STATE_DIR="${AX_OC_STATE:-$HOME/.openclaw-autoclaw}" \
+  "$OC_NODE" "$OC_CLI" agent --local --session-key "ax-run-$$-$(date +%s%N)" \
+    --message "$1" --json --timeout "${AX_TIMEOUT:-900}" < /dev/null 2>>"$LOG_DIR/autoclaw.err"
+  local rc=$?
+  slot_release "$OC_SLOT"
+  return $rc
+}
+
+extract_oc_reply() {
+  jq -r 'first(.payloads[]? | .text // empty) // .reply // .text // .message // empty' 2>/dev/null \
+    || sed -n 's/.*"text"[[:space:]]*:[[:space:]]*"\(.*\)".*/\1/p'
+}
+
+# decide/build review prompt as a standalone fn so retry_nonempty can re-invoke it.
+run_autoclaw_review() {
+  run_autoclaw "You are one of two orchestrators (your counterpart is Grok Bot). Review the PLAN for the TASK below. If the plan is sound, end your reply with the exact line '## CONSENSUS: APPROVE'. If you DISAGREE, you must enter structured debate. Reply EXACTLY in this format:
+## POSITION: <your counter-plan, numbered steps>
+## REASONING: <why your position is better for this task>
+## COMPROMISES-OK: <what you can concede without harming the outcome>
+## NON-NEGOTIABLES: <what you cannot accept, and why>
+## EVIDENCE: <numbered; each item: claim - real source title/URL. Only cite sources you are confident exist; they will be fact-checked.>
+TASK: $1
+
+PLAN:
+$2"
+}
+
+run_grokbot() {  # $1=prompt: submit to Grok Bot (headless via gbot CLI; GUI keystrokes as fallback)
+  local prompt="$1" target="${AX_GROKBOT_TARGET:-Grok Bot}"
+  if command -v gbot >/dev/null 2>&1 && [[ "${AX_GROKBOT_MODE:-auto}" != "gui" ]]; then
+    # headless first: patched grok-bot-cli talks to the live gateway (v3 descriptor)
+    local sendout sendrc=0
+    sendout=$(gbot send "$target" "$prompt" --json 2>&1) && sendrc=0 || sendrc=$?
+    if [[ $sendrc -eq 0 ]] && grep -q '"accepted":true' <<<"$sendout"; then
+      echo "[grokbot] brief delivered headlessly via gbot to '$target' (thread check: gbot thread '$target')"
+      return 0
+    fi
+    echo "ax: gbot send failed (rc=$sendrc) - falling back to GUI keystrokes" >&2
+  fi
+  printf '%s' "$prompt" | pbcopy
+  if ! osascript <<'AS' 2>/dev/null
+tell application "Grok Bot" to activate
+delay 1.2
+tell application "System Events"
+  tell process "Grok Bot"
+    set frontmost to true
+    delay 0.3
+    keystroke "v" using command down
+    delay 0.2
+    keystroke return
+  end tell
+end tell
+AS
+  then
+    echo "ax: Grok Bot needs one-time macOS permission:" >&2
+    echo "  System Settings > Privacy & Security > Accessibility > add /usr/bin/osascript (toggle ON)" >&2
+    return 1
+  fi
+  echo "[grokbot] planning brief submitted — check the Grok Bot window; optionally save its plan to $INBOX/plan-grokbot.md and re-run: ax decide <your-task>"
+}
+
+# ---------------- shared: autoclaw verdict ----------------
+autoclaw_verdict() {  # $1=plan text $2=task $3=logfile -> echoes APPROVE|REJECT|NONE
+  local v
+  v=$(run_autoclaw "You are the verification half of a two-key orchestrator pair (with Grok Bot, the planning half). Review this plan for the task below. Judge: correctness, completeness, risk, cheapest capable model family per step (GLM-5.3 for long-context/tool/coding-agentic steps; Grok for deep-reasoning/science/knowledge steps). Reply with exactly one final line '## CONSENSUS: APPROVE' or '## CONSENSUS: REJECT <one-line reason>'. Task: $2
+
+Plan:
+$1" | extract_oc_reply | tee "$3" | tail -20)
+  if grep -q "CONSENSUS: APPROVE" <<<"$v"; then echo APPROVE
+  elif grep -q "CONSENSUS: REJECT" <<<"$v"; then echo REJECT
+  else echo NONE; fi
+}
+
+# ---------------- global options ----------------
+[[ $# -eq 0 ]] && { usage; exit 0; }
+CMD="$1"; shift
+case "$CMD" in -h|--help|help) usage; exit 0 ;; esac
+
+AX_CWD="$PWD"; AX_TIMEOUT=900; AX_QUIET=0; AX_STDIN=""; AX_CONTEXT=""; AX_WEB=""; AX_MODEL=""; AX_CONTINUE=""; AX_CURSOR_PLAN=0; AX_OVERRIDE=0; AX_IMPL=""
+# Agents sometimes quote the whole invocation as one blob: "-C /path/to/dir <prompt>".
+# Peel a leading -C out of the first argument so these calls parse instead of dying.
+if [[ "${1:-}" =~ ^-C[[:space:]]+([^[:space:]]+)[[:space:]]*(.*)$ ]]; then
+  AX_CWD="${BASH_REMATCH[1]}"
+  rest="${BASH_REMATCH[2]}"
+  if [[ -n "$rest" ]]; then set -- "$rest" "${@:2}"; else shift; fi
+fi
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -C|--cd) AX_CWD="$2"; shift 2 ;;
+    -t|--timeout) AX_TIMEOUT="$2"; shift 2 ;;
+    -q|--quiet) AX_QUIET=1; shift ;;
+    -i|--stdin) AX_STDIN=1; shift ;;
+    -w|--web) AX_WEB=1; shift ;;
+    -m|--model) AX_MODEL="$2"; shift 2 ;;
+    --continue) AX_CONTINUE=1; shift ;;
+    --plan) AX_CURSOR_PLAN=1; shift ;;
+    --override) AX_OVERRIDE=1; shift ;;
+    --impl) AX_IMPL="$2"; shift 2 ;;
+    --) shift; break ;;
+    -*) die "unknown option: $1 (see ax --help)" ;;
+    *) break ;;
+  esac
+done
+[[ -d "$AX_CWD" ]] || die "not a directory: $AX_CWD"
+
+
+# ---------------- lane concurrency queue: wait instead of fail ----------------
+# Per-lane slot dirs; when full, callers queue until a slot frees (AX_QUEUE_TIMEOUT,
+# default 900s). Stale slots (holder killed -9) auto-expire after AX_SLOT_TTL (1800s).
+lane_max() {
+  case "$1" in
+    hermes|glm) echo "${AX_Q_GLM:-2}" ;;      # zai rate-limits >2 parallel (evidence: 3x325s fails)
+    autoclaw)   echo "${AX_Q_AUTOCLAW:-2}" ;;
+    grok)       echo "${AX_Q_GROK:-3}" ;;
+    cursor)     echo "${AX_Q_CURSOR:-2}" ;;
+    codex)      echo "${AX_Q_CODEX:-2}" ;;
+    grokbot)    echo 999 ;;
+    *)          echo 999 ;;
+  esac
+}
+slot_acquire() {  # $1=lane -> echoes slot path; returns 0 when acquired
+  local lane="$1" max ttl waited=0
+  max=$(lane_max "$lane")
+  [[ "$max" -ge 999 ]] && return 1   # no limit -> no queueing
+  local base="$AX_HOME/queue/$lane"; mkdir -p "$base"
+  ttl="${AX_SLOT_TTL:-1800}"
+  while true; do
+    local n=0 slot
+    for slot in "$base"/s.*; do [[ -d "$slot" ]] && n=$((n+1)); done
+    if (( n < max )); then
+      local mine="$base/s.$$-$(date +%s%N)"
+      if mkdir "$mine" 2>/dev/null; then
+        printf '%s' "$$" > "$mine/pid" 2>/dev/null
+        echo "$mine"; return 0
+      fi
+    fi
+    # dead-holder reaping: a slot whose pid no longer exists is freed immediately
+    for slot in "$base"/s.*; do
+      [[ -d "$slot" ]] || continue
+      local hpid; hpid=$(cat "$slot/pid" 2>/dev/null || true)
+      if [[ -n "$hpid" ]] && ! kill -0 "$hpid" 2>/dev/null; then
+        rm -rf "$slot" 2>/dev/null && echo "ax: reaped dead slot $slot (pid $hpid gone)" >&2
+      fi
+    done
+    # expire stale slots (holder died without release)
+    find "$base" -maxdepth 1 -type d -name 's.*' -mmin "+$((ttl/60))" -exec rm -rf {} + 2>/dev/null
+    (( waited++ % 20 == 0 )) && echo "ax: $lane lane at capacity ($n/$max) - queued (waited ${waited}s)" >&2
+    sleep 1
+    (( waited >= ${AX_QUEUE_TIMEOUT:-900} )) && return 2
+  done
+}
+slot_release() { [[ -n "${1:-}" ]] && rm -rf "$1" 2>/dev/null; return 0; }
+
+run_lane() {
+  local lane="$1" prompt="$2" log="$3" start rc
+  local SLOT=""
+  start=$(date +%s)
+  local qrc=0
+  if [[ "$lane" != "autoclaw" ]]; then  # autoclaw self-queues inside run_autoclaw
+    SLOT=$(slot_acquire "$lane") || qrc=$?
+  fi
+  if [[ $qrc -eq 2 ]]; then
+    echo "ax: $lane queue timeout after ${AX_QUEUE_TIMEOUT:-900}s - lane still at capacity" >&2
+    printf '%s\t%s\t124\tqs\tqueue-timeout\n' "$(basename "$log" .log)" "$lane" >> "$AX_HOME/history.tsv"
+    return 124
+  fi
+  [[ -n "$SLOT" ]] && trap 'slot_release "${SLOT:-}"' EXIT INT TERM
+  case "$lane" in
+    grok)     run_grok_model "$prompt" ;;
+    glm)      run_grok "$prompt" ;;
+    hermes)   run_hermes "$prompt" ;;
+    codex)    if [[ "$AX_CODEX_DISABLED" == 1 ]]; then echo "ax: codex lane disabled (AX_CODEX_DISABLED=1); use cursor or hermes" >&2; false; else run_codex "$prompt"; fi ;;
+    cursor)   run_cursor "$prompt" ;;
+    autoclaw) run_autoclaw "$prompt" | extract_oc_reply ;;
+    grokbot)  run_grokbot "$prompt" ;;
+    *) die "unknown lane: $lane" ;;
+  esac 2>&1 | tee "$log"
+  rc=${PIPESTATUS[0]}
+  printf '%s\t%s\t%s\ts\t%s\n' "$(basename "$log" .log)" "$lane" "$rc" "$(( $(date +%s) - start ))" >> "$AX_HOME/history.tsv"
+  slot_release "$SLOT"; SLOT=""
+  return "$rc"
+}
+
+
+# ---------------- work registry: who is working on what ----------------------
+REG_DIR="$AX_HOME/registry"; REG_FILE="$REG_DIR/work.json"
+reg_init() { mkdir -p "$REG_DIR"; [[ -s "$REG_FILE" ]] || printf '{"entries":[]}' > "$REG_FILE"; }
+reg_lock() {  # spin-lock via mkdir (atomic on APFS); auto-expires after 10s
+  local tries=0
+  until mkdir "$REG_FILE.lock" 2>/dev/null; do
+    (( tries++ > 100 )) && { rmdir "$REG_FILE.lock" 2>/dev/null; return 1; }
+    sleep 0.1
+  done
+  return 0
+}
+reg_unlock() { rmdir "$REG_FILE.lock" 2>/dev/null; }
+reg_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+work_cmd() {  # $@ = args after "ax work"
+  reg_init
+  local cmd="${1:-list}"; shift || true
+  local repo="" task="" chat="" status="" id=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --repo) repo="$2"; shift 2 ;;
+      --task) task="$2"; shift 2 ;;
+      --chat) chat="$2"; shift 2 ;;
+      --status) status="$2"; shift 2 ;;
+      --id) id="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  case "$cmd" in
+    claim)
+      [[ -n "$repo" && -n "$task" ]] || die "usage: ax work claim --repo R --task T [--chat C]"
+      local nid="w-$(date +%s)-$RANDOM" now; now=$(reg_now)
+      local agent="${AX_WORK_AGENT:-$(basename "${AX_LANE:-shell}")} surface=${AX_SURFACE:-unknown}"
+      reg_lock || die "registry busy"
+      jq --arg nid "$nid" --arg repo "$repo" --arg task "$task" --arg chat "$chat" \
+         --arg agent "$agent" --arg now "$now" \
+        '.entries += [{id:$nid, repo:$repo, task:$task, chat:$chat, agent:$agent, status:"active", started:$now, updated:$now}]' \
+        "$REG_FILE" > "$REG_FILE.tmp" && mv "$REG_FILE.tmp" "$REG_FILE"
+      reg_unlock
+      echo "$nid" ;;
+    update)
+      [[ -n "$id" ]] || die "usage: ax work update --id W --status active|done|blocked [--task T]"
+      local now; now=$(reg_now)
+      reg_lock || die "registry busy"
+      jq --arg id "$id" --arg st "${status:-active}" --arg now "$now" --arg task "$task" \
+        '(.entries[] | select(.id==$id)) |= (.status=$st | .updated=$now | (if $task != "" then .task=$task else . end))' \
+        "$REG_FILE" > "$REG_FILE.tmp" && mv "$REG_FILE.tmp" "$REG_FILE"
+      reg_unlock
+      echo "updated $id -> ${status:-active}" ;;
+    release)
+      [[ -n "$id" ]] || die "usage: ax work release --id W"
+      local now; now=$(reg_now)
+      reg_lock || die "registry busy"
+      jq --arg id "$id" --arg now "$now" '(.entries[] | select(.id==$id)) |= (.status="released" | .updated=$now)' \
+        "$REG_FILE" > "$REG_FILE.tmp" && mv "$REG_FILE.tmp" "$REG_FILE"
+      reg_unlock
+      echo "released $id" ;;
+    list)
+      local flt='.'
+      [[ -n "$repo" ]] && flt="select(.repo==\"$repo\")"
+      { [[ -n "${AX_ACTIVE_ONLY:-}" ]] && flt="$flt | select(.status==\"active\")"; } 2>/dev/null
+      jq -r --arg repo "$repo" '.entries | map(select(.repo==$repo or $repo=="")) | map(select(if env.AX_ACTIVE_ONLY then .status=="active" else true end)) | sort_by(.updated) | reverse | .[] | "\(.updated)  \(.id)  [\(.status)]  \(.repo)  \(.agent)  \(.task)\(if .chat != "" then "  chat:"+.chat else "" end)"' "$REG_FILE" 2>/dev/null || echo "(no entries)" ;;
+    *) die "usage: ax work <claim|update|release|list> ..." ;;
+  esac
+}
+
+# ---------------- evidence gate: no completion claim without checkable proof --
+evidence_gate() {  # $1=dir $2=work-report text; emits machine-checkable facts
+  local dir="$1" report="$2"
+  echo "### independent machine checks ($(date))"
+  if git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "-- git status --"; git -C "$dir" status --porcelain 2>&1 | head -25
+    echo "-- git diff --stat (uncommitted) --"; git -C "$dir" diff --stat 2>&1 | tail -5
+  else
+    echo "-- not a git repo; dir listing --"; ls -la "$dir" 2>/dev/null | head -15
+  fi
+  echo "-- claimed files --"
+  grep -oE '[A-Za-z0-9_./-]+\.(ts|tsx|js|jsx|py|go|rs|java|swift|md|json|ya?ml|toml|sh)' <<<"$report" | sort -u | head -12 | while IFS= read -r f; do
+    [[ -f "$dir/$f" ]] && echo "EXISTS: $f" || echo "MISSING: $f"
+  done
+  echo "-- artifact dirs --"
+  for pt in reports junithtml test-results dist target build; do [[ -d "$dir/$pt" ]] && echo "artifact-dir: $pt"; done
+}
+
+# ---------------- commands ----------------
+case "$CMD" in
+  lanes)
+    cat <<EOF
+lanes (ax v2 - consensus orchestration)
+  ORCHESTRATORS: grokbot (plans, GUI) + autoclaw (verifies) - joint consensus, user override only
+  IMPLEMENTATION: autoclaw (frontend/UI design) · hermes (core/backend) · cursor (IDE-grade, non-UI)
+  EDITOR: codex (edits, refactors, tests, running code)
+  grok      $( command -v "$CURSOR_BIN" >/dev/null && echo ok || echo MISSING )  Grok family on Cursor headless ($AX_GROK_MODEL)
+  glm       $( [[ -x "$HERMES_VENV" ]] && echo ok || echo MISSING )  Hermes profile grok (glm-5.3)
+  hermes    $( [[ -x "$HERMES_VENV" ]] && echo ok || echo MISSING )  Hermes full (glm-5.3, 1M ctx)
+  codex     $( [[ -x "$CODEX_BIN" ]] && echo ok || echo MISSING )  $CODEX_BIN
+  cursor    $( command -v "$CURSOR_BIN" >/dev/null && echo ok || echo MISSING )  Cursor Agent CLI
+  autoclaw  $( [[ -x "$OC_NODE" && -f "$OC_CLI" ]] && echo ok || echo MISSING )  gateway ws://127.0.0.1:18789
+  grokbot   $( [[ -d "/Applications/Grok Bot.app" ]] && echo ok || echo MISSING )  GUI submission (Accessibility once)
+  policy: $AX_HOME/policy.md   inbox: $INBOX   logs: $LOG_DIR
+EOF
+    ;;
+
+  model)
+    if [[ "${1:-}" == "cost" ]]; then
+      awk '/^## 2\. Cost ladder/{f=1} /^## 4\./{f=0} f' "$AX_HOME/policy.md"
+    else
+      cat "$AX_HOME/policy.md"
+    fi
+    ;;
+
+  plan)
+    PROMPT="$(read_prompt "$@")"
+    [[ -n "$PROMPT" ]] || die "empty prompt"
+    run_lane grokbot "$PROMPT" "$RUNS_DIR/$(new_id).log"
+    ;;
+
+  decide)
+    PROMPT="$(read_prompt "$@")"
+    [[ -n "$PROMPT" ]] || die "empty prompt"
+    PLAN_FILE="$INBOX/plan-grokbot.md"
+    # per-task seeding: a stale plan from an earlier task must not highjack this
+    # decide. Trust the inbox plan only when its first line names THIS task.
+    PLAN_TASK=$(sed -n '1s/^PLAN: //p' "$PLAN_FILE" 2>/dev/null | head -1)
+    if [[ -s "$PLAN_FILE" && -n "$PLAN_TASK" && "$PLAN_TASK" == "$PROMPT" ]]; then
+      : # inbox plan matches this exact task - use it
+    elif [[ -s "$PLAN_FILE" ]]; then
+      echo "== inbox plan is for a DIFFERENT task - not seeding from it ==" >&2
+      mv "$PLAN_FILE" "$INBOX/plan-grokbot.stale-$(ts).md" 2>/dev/null || true
+      PLAN_FILE=""
+    fi
+    if [[ ! -s "${PLAN_FILE:-}" ]]; then
+      echo "== [grok-side] generating plan headless (Grok on Cursor) ==" >&2
+      idP=$(new_id)
+      PLAN_RAW=$(retry_nonempty "grok-plan" "$RUNS_DIR/$idP.log" run_grok_plan "$PROMPT")
+      PLAN=$(awk '/^PLAN:/{f=1} f' <<<"$PLAN_RAW" | tail -n +2)
+      if [[ -z "${PLAN// }" ]]; then
+        DDIR="$AX_HOME/debate/$(ts)-$RANDOM"; mkdir -p "$DDIR"
+        cp /dev/null "$DDIR/autoclaw-position.md" 2>/dev/null || true
+        stall_exit "$DDIR" "grok-plan" "headless planning empty after retries (log $idP)"
+      fi
+      printf 'PLAN: %s\n(headless grok-side plan, %s)\n\n%s\n' "$PROMPT" "$(date)" "$PLAN" > "$INBOX/plan-headless.md"
+      PLAN_FILE="$INBOX/plan-headless.md"
+    fi
+    DDIR="$AX_HOME/debate/$(ts)-$RANDOM"; mkdir -p "$DDIR"
+    cp "$PLAN_FILE" "$DDIR/plan-seeded.md"   # snapshot NOW: concurrent decides share the inbox
+    PLAN_FILE="$DDIR/plan-seeded.md"
+    PLAN=$(cat "$PLAN_FILE")
+    idA=$(new_id)
+    echo "== [autoclaw] reviewing grokbot plan (agree or counter-position) ==" >&2
+    REVIEW=$(retry_nonempty "autoclaw-review" "$RUNS_DIR/$idA.log" run_autoclaw_review "$PROMPT" "$PLAN" | extract_oc_reply | tee "$RUNS_DIR/$idA.log" "$DDIR/autoclaw-position.md")
+    if [[ -z "${REVIEW// }" ]]; then
+      stall_exit "$DDIR" "autoclaw-review" "empty review after retries (log $idA)"
+    fi
+    if ! grep -q "^## POSITION" <<<"$REVIEW" && ! grep -q "CONSENSUS: APPROVE" <<<"$REVIEW"; then
+      # malformed counter: neither an approval nor a structured counter-position
+      cp "$RUNS_DIR/$idA.log" "$DDIR/autoclaw-position.md" 2>/dev/null || true
+      stall_exit "$DDIR" "autoclaw-review-malformed" "no APPROVE line and no ## POSITION section (log $idA)"
+    fi
+
+    if grep -q "CONSENSUS: APPROVE" <<<"$REVIEW"; then
+      cp "$PLAN_FILE" "$INBOX/plan-approved.md"
+      echo "outcome: AGREEMENT - plan approved without debate" | tee -a "$DDIR/audit.md"
+      echo "DECISION: APPROVED - proceed (ax build \"$PROMPT\")"
+      exit 0
+    fi
+
+    echo "== disagreement detected - evidence debate begins ==" >&2
+    if [[ -s "$INBOX/grokbot-rebuttal.md" ]]; then
+      GPOS=$(cat "$INBOX/grokbot-rebuttal.md")
+      echo "(using pasted grokbot rebuttal from inbox)" >&2
+    else
+      idG=$(new_id)
+      GPOS=$(retry_nonempty "grok-position" "$RUNS_DIR/$idG.log" run_grok_pos "$PROMPT" "$PLAN" "$REVIEW" | tee "$RUNS_DIR/$idG.log" "$DDIR/grok-position.md")
+      if [[ -z "${GPOS// }" ]]; then
+        stall_exit "$DDIR" "grok-position" "empty rebuttal after retries (log $idG)"
+      fi
+      if ! grep -q "^## POSITION" <<<"$GPOS"; then
+        stall_exit "$DDIR" "grok-position-malformed" "no ## POSITION section in rebuttal (log $idG)"
+      fi
+    fi
+
+    echo "== cross-check round: each side verifies the other's citations ==" >&2
+    idC1=$(new_id)
+    GEV=$(awk '/^## EVIDENCE/{f=1} f' <<<"$GPOS" | tail -n +2); [[ -n "${GEV// }" ]] || GEV="(no evidence section provided)"
+    CC_A=$(retry_nonempty "crosscheck-autoclaw" "$RUNS_DIR/$idC1.log" run_autoclaw_crosscheck "$GEV" | extract_oc_reply | tee "$RUNS_DIR/$idC1.log" "$DDIR/crosscheck-by-autoclaw.md")
+    idC2=$(new_id)
+    AEV=$(awk '/^## EVIDENCE/{f=1} f' <<<"$REVIEW" | tail -n +2); [[ -n "${AEV// }" ]] || AEV="(no evidence section provided)"
+    CC_G=$(retry_nonempty "crosscheck-grok" "$RUNS_DIR/$idC2.log" run_grok_crosscheck "$AEV" | tee "$RUNS_DIR/$idC2.log" "$DDIR/crosscheck-by-grok.md")
+
+    gv=$(grep -c ": VERIFIED" <<<"$CC_A"); gv=${gv:-0}
+    gf=$(grep -c ": FABRICATED" <<<"$CC_A"); gf=${gf:-0}
+    av=$(grep -c ": VERIFIED" <<<"$CC_G"); av=${av:-0}
+    af=$(grep -c ": FABRICATED" <<<"$CC_G"); af=${af:-0}
+    gs=$((gv - 3*gf)); as=$((av - 3*af))
+    echo "evidence score - grok-side: $gs (verified $gv / fabricated $gf) · autoclaw: $as (verified $av / fabricated $af)" >&2
+
+    if (( gs > as )); then WINNER="GROK-SIDE"
+    elif (( as > gs )); then WINNER="AUTOCLAW"
+    else
+      # tie: check whether the two positions actually converged on the same plan
+      idV=$(new_id)
+      CONV=$(AX_FAST=1 run_grok "Compare these two orchestrator positions. Do they describe substantially the same plan (same core steps, same architecture, differences only in wording or tunable details)? Reply exactly one word: SAME or DIFFERENT.
+POSITION A:
+$(sed -n '/^## POSITION/,/^## REASONING/p' "$DDIR/autoclaw-position.md")
+
+POSITION B:
+$(awk '/^## POSITION/{f=1} /^## REASONING/{f=0} f' <<<"$GPOS" | tail -n +2)" "$RUNS_DIR/$idV.log" | tail -1 | tr '[:lower:]' '[:upper:]')
+      if grep -qx "SAME" <<<"$CONV"; then WINNER="CONVERGED"
+      else
+      idJ=$(new_id)
+      J=$( { if [[ "$AX_CODEX_DISABLED" == 1 ]]; then run_hermes "$(cat)"; else run_codex "$(cat)"; fi; } <<<"Neutral judge, rubric-bound. Two orchestrators debated a plan. Fabricated evidence strikes the claims it supported; verified evidence strengthens them; explanation quality breaks remaining ties. Judge ONLY from the fact-check results below. Reply exactly one line 'VERDICT: GROK-SIDE' or 'VERDICT: AUTOCLAW' or 'VERDICT: TIE'.
+Fact-check of GROK-side evidence (by AutoClaw):
+$CC_A
+Fact-check of AUTOCLAW evidence (by Grok side):
+$CC_G" | tee "$RUNS_DIR/$idJ.log" "$DDIR/judge.md")
+      WINNER=$(grep -oE "GROK-SIDE|AUTOCLAW|TIE" <<<"$J" | tail -1)
+      fi
+    fi
+
+    {
+      echo "# debate audit - $(date)"
+      echo "TASK: $PROMPT"; echo
+      echo "## grokbot plan"; echo "$PLAN"; echo
+      echo "## autoclaw position"; echo "$REVIEW"; echo
+      echo "## grok-side position"; echo "$GPOS"; echo
+      echo "## cross-check by autoclaw (grok evidence)"; echo "$CC_A"; echo
+      echo "## cross-check by grok (autoclaw evidence)"; echo "$CC_G"; echo
+      echo "## score: grok $gs (v$gv/f$gf) · autoclaw $as (v$av/f$af)"
+      echo "## WINNER: $WINNER"
+    } > "$DDIR/audit.md"
+
+    case "$WINNER" in
+      GROK-SIDE) cp "$PLAN_FILE" "$INBOX/plan-approved.md"
+        echo "WINNER: GROK-SIDE (better-grounded explanation) - original plan adopted" ;;
+      AUTOCLAW)  sed -n '/^## POSITION/,/^## REASONING/p' "$DDIR/autoclaw-position.md" | sed '$d' > "$INBOX/plan-approved.md"
+        echo "WINNER: AUTOCLAW (better-grounded explanation) - counter-plan adopted" ;;
+      CONVERGED) sed -n '/^## POSITION/,/^## REASONING/p' "$DDIR/autoclaw-position.md" | sed '$d' > "$INBOX/plan-approved.md"
+        echo "WINNER: CONVERGED - both orchestrators now stand behind the same plan; adopted" ;;
+      *)         echo "WINNER: TIE - evidence inconclusive; user decides (edit plan-approved.md manually or rerun with --override)" ;;
+    esac
+    echo "audit: $DDIR/audit.md - approved plan: $INBOX/plan-approved.md"
+    ;;
+
+  override)
+    exec "$0" decide --override "${@:-$(tail -1 "$AX_HOME/inbox/last-task.txt" 2>/dev/null || echo task)}"
+    ;;
+
+  build)
+    PROMPT="$(read_prompt "$@")"
+    [[ -n "$PROMPT" ]] || die "empty prompt"
+    printf '%s\n' "$PROMPT" > "$INBOX/last-task.txt"
+    # work registry: check conflicts, claim this build
+    AX_WORK_AGENT="ax-build" WORKID=""
+    REG_REPO=$(git -C "$AX_CWD" config --get remote.origin.url 2>/dev/null | sed -E 's#.*[:/]([^/]+/[^/.]+)(\.git)?$#\1#' | head -1)
+    [[ -n "$REG_REPO" ]] || REG_REPO="$AX_CWD"
+    CONFLICTS=$(AX_ACTIVE_ONLY=1 work_cmd list --repo "$REG_REPO" 2>/dev/null | grep -v "No active" || true)
+    if [[ -n "$CONFLICTS" ]]; then
+      echo "== [registry] active work on $REG_REPO ==" >&2; echo "$CONFLICTS" >&2
+      echo "(coordinate via the listed chat/agent, or --override to proceed anyway)" >&2
+      [[ "$AX_OVERRIDE" -eq 1 ]] || { echo "pass --override to build despite the active entries" >&2; exit 4; }
+    fi
+    WORKID=$(AX_WORK_AGENT=ax-build work_cmd claim --repo "$REG_REPO" --task "build: $PROMPT" --chat "ax build ($(date +%m-%d))")
+    # 1) gate: approved plan (debate output) or headless plan + autoclaw verdict
+    if [[ "$AX_OVERRIDE" -eq 0 ]]; then
+      if [[ -s "$INBOX/plan-approved.md" ]]; then
+        APPROVED_TASK=$(sed -n '1s/^PLAN: //p' "$INBOX/plan-approved.md" | head -1)
+        if [[ -n "$APPROVED_TASK" && "$APPROVED_TASK" != "$PROMPT" ]]; then
+          echo "gate: stale plan-approved.md is for a DIFFERENT task - not using it" >&2
+          mv "$INBOX/plan-approved.md" "$INBOX/plan-approved.stale-$(ts).md" 2>/dev/null || true
+        else
+          PLAN=$(cat "$INBOX/plan-approved.md"); VERDICT="APPROVE (pre-approved by debate)"
+        fi
+      fi
+      if [[ -z "${PLAN:-}" ]]; then
+        PLAN_FILE="$INBOX/plan-grokbot.md"
+        PLAN_TASK=$(sed -n '1s/^PLAN: //p' "$PLAN_FILE" 2>/dev/null | head -1)
+        if [[ -s "$PLAN_FILE" && -n "$PLAN_TASK" && "$PLAN_TASK" != "$PROMPT" ]]; then
+          echo "gate: inbox plan is for a DIFFERENT task - not seeding from it" >&2
+          mv "$PLAN_FILE" "$INBOX/plan-grokbot.stale-$(ts).md" 2>/dev/null || true
+          PLAN_FILE=""
+        fi
+        if [[ ! -s "${PLAN_FILE:-}" ]]; then
+          echo "== [grok-side] headless plan ==" >&2
+          idP=$(new_id)
+          PLAN_RAW=$(retry_nonempty "grok-plan" "$RUNS_DIR/$idP.log" run_grok_plan "$PROMPT")
+          PLAN=$(awk '/^PLAN:/{f=1} f' <<<"$PLAN_RAW" | tail -n +2)
+          [[ -n "${PLAN// }" ]] && printf 'PLAN: %s\n\n%s\n' "$PROMPT" "$PLAN" > "$INBOX/plan-grokbot.md" || { DDIR="$AX_HOME/debate/$(ts)-$RANDOM"; mkdir -p "$DDIR"; stall_exit "$DDIR" "grok-plan" "headless planning empty after retries (log $idP)"; }
+        else
+          PLAN=$(cat "$PLAN_FILE")
+        fi
+        VERDICT=$(autoclaw_verdict "$PLAN" "$PROMPT" "$RUNS_DIR/$(new_id).log")
+      fi
+      [[ "$VERDICT" == APPROVE* ]] || { echo "gate: $VERDICT - plan not approved; run 'ax decide' or pass --override" >&2; exit 2; }
+      echo "gate: $VERDICT" >&2
+    else
+      PLAN="(user override) $PROMPT"
+    fi
+    # 2) implementation lane
+    IMPL="${AX_IMPL:-$(AX_FAST=1 run_grok "Pick implementation lane. Reply ONLY one word: autoclaw (frontend/UI/design work), hermes (core/backend/scripts/infra), cursor (IDE-grade coding that is not UI design). Task: $PROMPT" "$RUNS_DIR/$(new_id).log" | tail -1 | tr '[:upper:]' '[:lower:]')}"
+    IMPL=$(grep -qxE "autoclaw|cursor" <<<"$IMPL" && grep -oE "autoclaw|cursor" <<<"$IMPL" | head -1 || echo hermes)
+    echo "== [$IMPL] implementing ==" >&2
+    idI=$(new_id)
+    case "$IMPL" in
+      autoclaw)
+        run_lane autoclaw "Implement this approved plan. Target directory: $AX_CWD (use shell commands to read/write files there). This is a frontend/UI task: deliver a BEST-IN-CLASS UI - design craft, real content, clear hierarchy, working interactions in every state (hover/focus/active/empty/loading/error), responsive layout, accessible markup, polished visual detail. Minimal dependency footprint, maximum quality. BEYOND-PARITY RULE: if an opportunity exists to exceed the spec/reference measurably (performance, robustness, accessibility, UX), implement it ONLY with evidence (benchmark output, before/after numbers, test results); unevidenced improvements stay as noted opportunities under ## OPPORTUNITIES, never as claims. Plan: $PLAN" "$RUNS_DIR/$idI.log" >/dev/null || echo "WARN: autoclaw failed (ax log $idI)" >&2 ;;
+      cursor)
+        run_lane cursor "Implement this approved plan in $AX_CWD. BEST-IN-CLASS bar: correct, idiomatic, performant, well-structured code with proper error handling. Scope to the plan, no corner-cutting. BEYOND-PARITY RULE: if an opportunity exists to exceed the spec/reference measurably (performance, robustness, accessibility, UX), implement it ONLY with evidence (benchmark output, before/after numbers, test results); unevidenced improvements stay as noted opportunities under ## OPPORTUNITIES, never as claims. $PLAN" "$RUNS_DIR/$idI.log" >/dev/null || echo "WARN: cursor failed (ax log $idI)" >&2 ;;
+      *)
+        run_lane hermes "Implement this approved plan in $AX_CWD. BEST-IN-CLASS bar: correct, secure, performant, well-tested, idiomatic, readable code. Scope to the plan (no drive-by redesign) but never cut corners. BEYOND-PARITY RULE: if an opportunity exists to exceed the spec/reference measurably (performance, robustness, accessibility, UX), implement it ONLY with evidence (benchmark output, before/after numbers, test results); unevidenced improvements stay as noted opportunities under ## OPPORTUNITIES, never as claims. $PLAN" "$RUNS_DIR/$idI.log" >/dev/null || echo "WARN: hermes failed (ax log $idI)" >&2 ;;
+    esac
+    FIN_LANE=codex; [[ "$AX_CODEX_DISABLED" == 1 ]] && FIN_LANE=cursor
+    # 3) finalize (codex, or cursor when codex disabled) - evidence-mandatory prompt
+    echo "== [$FIN_LANE] finalize edits/tests/run (evidence required) ==" >&2
+    idC=$(new_id)
+    run_lane "$FIN_LANE" "Finalize the changes in $AX_CWD for this plan: raise the implementation to a BEST-IN-CLASS standard - fix defects, edge cases, error handling, naming, and consistency; run tests/build; add missing critical tests; DO NOT redesign architecture. BEYOND-PARITY RULE: if an opportunity exists to exceed the spec/reference measurably (performance, robustness, accessibility, UX), implement it ONLY with evidence (benchmark output, before/after numbers, test results); unevidenced improvements stay as noted opportunities under ## OPPORTUNITIES, never as claims. EVIDENCE RULE: every completion claim MUST include the exact command you ran and its real output (git diff --stat, test tail with counts, exit status). Anything you cannot show output for goes under '## UNVERIFIED'. End with '## CHANGES' listing files + evidence. Plan: $PLAN" "$RUNS_DIR/$idC.log" >/dev/null || echo "WARN: $FIN_LANE nonzero (ax log $idC)" >&2
+    # 4) independent evidence gate
+    echo "== [evidence gate] verifying claims independently ==" >&2
+    idE=$(new_id)
+    GATEREPORT=$(evidence_gate "$AX_CWD" "$(cat "$RUNS_DIR/$idC.log")")
+    EV=$(AX_FAST=1 run_grok "You are the harness evidence gate. A claim counts as DONE only if backed by checkable evidence: command+real output, existing file/diff, artifact, or citation. Beyond-parity improvement claims also require evidence (benchmark/before-after numbers); unevidenced ones must sit under ## OPPORTUNITIES. Compare WORK REPORT claims against MACHINE CHECKS. Reply exactly one final line: '## VERDICT: DONE-EVIDENCED' or '## VERDICT: INCOMPLETE - <missing evidence>'. MACHINE CHECKS:
+$GATEREPORT
+
+WORK REPORT ($FIN_LANE):
+$(tail -60 "$RUNS_DIR/$idC.log")" "$RUNS_DIR/$idE.log")
+    echo "$GATEREPORT" > "$RUNS_DIR/$idE.gate.txt"
+    echo; echo "──── final report ($FIN_LANE) ────"
+    sed -n '/## CHANGES/,$p' "$RUNS_DIR/$idC.log" || tail -20 "$RUNS_DIR/$idC.log"
+    echo; echo "──── evidence gate ────"
+    if grep -q "VERDICT: DONE-EVIDENCED" <<<"$EV"; then
+      echo "BUILD: DONE - every completion claim is evidence-backed (gate log $idE)"
+    else
+      echo "BUILD: UNEVIDENCED - treated as NOT DONE until evidence exists:"
+      grep "VERDICT: INCOMPLETE" <<<"$EV" || tail -3 "$RUNS_DIR/$idE.log"
+      echo "(gate log $idE; machine checks: $RUNS_DIR/$idE.gate.txt)"
+    fi
+    [[ -n "${WORKID:-}" ]] && work_cmd update --id "$WORKID" --status "$(grep -q "VERDICT: DONE-EVIDENCED" <<<"$EV" && echo done || echo blocked)" >/dev/null
+    echo "logs: $idI $idC $idE (ax log <id>) · work: ${WORKID:-n/a}"
+    ;;
+
+  triage)
+    PROMPT="$(read_prompt "$@")"
+    [[ -n "$PROMPT" ]] || die "empty prompt"
+    classification=$(AX_FAST=1 run_grok "Classify. Reply ONLY one: grokbot (planning/decision), autoclaw (verify/ops/mail/cal/research AND frontend/UI design-build), hermes (implement core/backend), cursor (IDE-grade coding, non-UI)$( [[ "$AX_CODEX_DISABLED" == 1 ]] || echo ", codex (edit/refactor/test/run code)"). Request: $PROMPT" "$RUNS_DIR/$(new_id).log" | tail -1 | tr '[:upper:]' '[:lower:]')
+    lane="grok"; for l in grokbot autoclaw hermes cursor $( [[ "$AX_CODEX_DISABLED" == 1 ]] || echo codex); do grep -qx "$l" <<<"$classification" && lane="$l"; done
+    [[ $AX_QUIET -eq 1 ]] || echo "→ routed to: $lane" >&2
+    run_lane "$lane" "$PROMPT" "$RUNS_DIR/$(new_id).log"
+    ;;
+
+  review)
+    target="${1:-.}"; shift || true
+    extra="$(read_prompt "$@")"
+    run_lane autoclaw "Review: $target ${extra:+- $extra} End with '## CONSENSUS: APPROVE' or '## CONSENSUS: REJECT <reason>'." "$RUNS_DIR/$(new_id).log"
+    ;;
+
+  chat) exec "$HERMES_VENV" -p grok ;;
+
+  doctor) {
+    echo "== ax doctor (v2) =="
+    for lane in grok hermes $( [[ "$AX_CODEX_DISABLED" == 1 ]] || echo codex) cursor autoclaw; do
+      id=$(new_id); log="$RUNS_DIR/$id.log"
+      printf '%-9s ' "$lane"
+      if out=$(run_lane "$lane" "Health check: reply with exactly OK" "$log" 2>/dev/null) && grep -q "OK" <<<"$out"; then
+        echo "OK   ($(grep -c . <<<"$out") lines, log $id)"
+      else
+        echo "FAIL - see $log"
+      fi
+    done
+    printf '%-9s ' grokbot
+    if [[ -d "/Applications/Grok Bot.app" ]] && pgrep -x "Grok Bot" >/dev/null; then
+      echo "OK   (app running; GUI lane)"
+    else
+      echo "WARN  (app not running - open -a 'Grok Bot')"
+    fi
+  } ;;
+
+  bg)
+    # detached lane run for callers with short exec deadlines (Grok Bot daemon ~10s):
+    # returns a run id immediately; the lane completes independently; result lands in
+    # ~/.config/ax/runs/<id>.log + history.tsv. Check later: ax log <id> / ax last
+    shift $((OPTIND-1)) 2>/dev/null || true
+    LANE="${1:-}"; shift || true
+    [[ "$LANE" =~ ^(grok|glm|hermes|codex|cursor|autoclaw|grokbot)$ ]] || die "usage: ax bg <lane> [prompt...]"
+    PROMPT="$(read_prompt "$@")"
+    [[ -n "$PROMPT" ]] || die "empty prompt"
+    BGID=$(new_id)
+    LOGF="$RUNS_DIR/$BGID.log"
+    # Survive caller sandbox group-kills (Grok Bot daemon kills lingering process
+    # groups ~5s after command exit): launch via setpgid in a fresh group with all
+    # fds detached, so no close-event watchdog ever sees us.
+    ( perl -e 'use POSIX qw(setpgid); setpgid(0,0) or die "setpgid: $!"; exec @ARGV' /bin/bash -c \
+        'LOGF="$1"; LANE="$2"; HIST="$3"; shift 3; "$0" "$LANE" "$*" > "$LOGF" 2>&1 < /dev/null; rc=$?; printf "%s\\t%s\\t%s\\tbg\\t%s\\n" "$(basename "$LOGF" .log)" "$LANE" "$rc" "$(date +%s)" >> "$HIST"; exit $rc' \
+        "$0" "$LOGF" "$LANE" "$AX_HOME/history.tsv" "$PROMPT" ) >/dev/null 2>&1 < /dev/null &
+    disown 2>/dev/null || true
+    echo "$BGID"
+    ;;
+
+  work) work_cmd "$@" ;;
+  last) n="${1:-10}"; tail -n "$n" "$AX_HOME/history.tsv" 2>/dev/null | column -t ;;
+  log)   [[ -n "${1:-}" ]] || die "usage: ax log <run-id>"; cat "$RUNS_DIR/$1.log" 2>/dev/null || die "no log: $1" ;;
+  open)  open "http://127.0.0.1:18789/" ;;
+  stats) {
+      echo "== ax stats ($(date '+%Y-%m-%d %H:%M')) =="
+      # debate completion: an audit.md means the decide reached an outcome
+      total=0; done=0
+      for d in "$AX_HOME"/debate/*/; do
+        [[ -d "$d" ]] || continue
+        total=$((total+1))
+        [[ -f "$d/audit.md" ]] && done=$((done+1))
+      done
+      if (( total > 0 )); then
+        printf 'debates: %d total, %d completed (%d%%), %d stalled\n' "$total" "$done" "$(( done * 100 / total ))" "$(( total - done ))"
+        echo 'stalled debates by stage (files present):'
+        for d in "$AX_HOME"/debate/*/; do
+          [[ -d "$d" && ! -f "$d/audit.md" ]] || continue
+          stage="plan-only"
+          [[ -s "$d/autoclaw-position.md" ]] && stage="after-autoclaw-review"
+          [[ -s "$d/grok-position.md" ]] && stage="after-grok-position"
+          [[ -s "$d/crosscheck-by-autoclaw.md" || -s "$d/crosscheck-by-grok.md" ]] && stage="during-crosscheck"
+          printf '  %s  %s\n' "$(basename "$d")" "$stage"
+        done | awk '{c[$2]++} END {for (s in c) printf "  %-4d %s\n", c[s], s}' | sort -rn
+      else
+        echo 'debates: none recorded'
+      fi
+      # lane health from history.tsv (fields: id lane rc kind secs)
+      if [[ -s "$AX_HOME/history.tsv" ]]; then
+        echo 'lane volumes / failures:'
+        awk -F'\t' 'NF>=5 && $2!="" { n[$2]++; if ($3!=0) f[$2]++ } END { for (l in n) printf "  %-9s %4d runs, %3d nonzero-exit\n", l, n[l], f[l]+0 }' "$AX_HOME/history.tsv" | sort
+        echo 'recent empty-reply guard hits:'
+        grep -l "empty-reply guard" "$RUNS_DIR"/*.log 2>/dev/null | tail -3 | sed 's|.*/|  |' || echo '  (none)'
+      fi
+    } ;;
+
+  grok|glm|hermes|codex|cursor|autoclaw|grokbot)
+    PROMPT="$(read_prompt "$@")"
+    [[ -n "$PROMPT" ]] || die "empty prompt (ax $CMD \"your task\")"
+    run_lane "$CMD" "$PROMPT" "$RUNS_DIR/$(new_id).log"
+    ;;
+
+  *) usage; die "unknown command: $CMD" ;;
+esac
