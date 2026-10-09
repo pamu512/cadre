@@ -45,7 +45,7 @@ export async function retractRun(id, reason = 'retracted by operator') {
   } catch { /* no preference ledger */ }
   try {
     const { retractHandRun } = await import('./invoke.js');
-    if (typeof retractHandRun === 'function') cascades.handMemory = retractHandRun(id);
+    if (typeof retractHandRun === 'function') cascades.handMemory = retractHandRun(id).length;
   } catch { /* no hand memory */ }
   try {
     cascades.parityClaims = retractParityClaimsForRun(id, reason);
