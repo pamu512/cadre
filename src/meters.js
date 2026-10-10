@@ -109,7 +109,7 @@ function sumJsonlTokens(dir, cap) {
 //   - recurring windows (window_hours) roll the reset forward while it's past
 //   - the effective denominator includes rollover so % is honest
 export function pacing({ quota, resetAt, used, rollover = 0, windowHours = null }) {
-  if (quota == null && !rollover) return { state: 'unknown', note: 'quota or reset unknown — "—"' };
+  if (quota == null && !rollover) return { state: 'unknown', note: 'quota or reset unknown ("—")' };
   const now = Date.now();
   let reset = resetAt ? new Date(resetAt).getTime() : NaN;
   if (Number.isNaN(reset) && !windowHours) return { state: 'unknown', note: 'bad reset date' };
@@ -119,10 +119,10 @@ export function pacing({ quota, resetAt, used, rollover = 0, windowHours = null 
   }
   const totalAvail = (quota || 0) + (rollover || 0);
   const left = totalAvail - (used || 0);
-  if (left <= 0) return { state: 'empty', note: 'exhausted — downshift or park metered behind the budget gate' };
+  if (left <= 0) return { state: 'empty', note: 'exhausted: downshift or park metered behind the budget gate' };
   const hoursLeft = Number.isFinite(reset) ? Math.max(0.1, (reset - now) / 3.6e6) : null;
   const pct = left / totalAvail;
-  if (pct < 0.1) return { state: 'pacing', note: `${pct.toLocaleString(undefined, { style: 'percent' })} left${hoursLeft != null ? `, ${hoursLeft.toFixed(1)}h to reset` : ''} — pace it` };
+  if (pct < 0.1) return { state: 'pacing', note: `${pct.toLocaleString(undefined, { style: 'percent' })} left${hoursLeft != null ? `, ${hoursLeft.toFixed(1)}h to reset` : ''}. Pace it` };
   return { state: 'ok', note: `${pct.toLocaleString(undefined, { style: 'percent' })} of quota left${rollover ? ` (+${rollover.toLocaleString()} rollover)` : ''}` };
 }
 
@@ -138,7 +138,7 @@ export function renderMeters({ meters, usage }) {
     const used = usage.get(m.lane)?.tokens || 0;
     const p = pacing({ quota: m.quota_tokens, resetAt: m.reset_at, used });
     lines.push(
-      `${m.lane.padEnd(16)} ${String(m.provider || '—').padEnd(12)} ${String(m.quota_tokens ?? '—').padStart(9)} tok  reset ${m.reset_at || '—'}  ${m.rail === 'header' ? '[fallback: header estimate — flagged]' : m.rail || '—'}  ${p.state}: ${p.note}`
+      `${m.lane.padEnd(16)} ${String(m.provider || '—').padEnd(12)} ${String(m.quota_tokens ?? '—').padStart(9)} tok  reset ${m.reset_at || '—'}  ${m.rail === 'header' ? '[fallback: header estimate, flagged]' : m.rail || '—'}  ${p.state}: ${p.note}`
     );
   }
   return lines;

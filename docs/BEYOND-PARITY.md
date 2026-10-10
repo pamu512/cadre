@@ -1,12 +1,12 @@
-# Beyond Parity — generated from the ledger
+# Beyond Parity: generated from the ledger
 
-Generated: 2026-10-06T08:45:28.321Z by `cadre metrics --report` — do not edit by hand; regenerate instead.
+Generated: 2026-10-10T12:27:34.529Z by `cadre metrics --report`. do not edit by hand; regenerate instead.
 
 ## Run ledger
 
 - runs recorded: **0** (settled 0)
-- false-DONE rate: **—** (0 rejected/failed with claimed command evidence) — target ≤ 5%
-- sweep recovery: **—** (0 swept) — target ≥ 90%, 0 silent losses
+- false-DONE rate: **—** (0 rejected/failed with claimed command evidence). Target ≤ 5%
+- sweep recovery: **—** (0 swept). Target ≥ 90%, 0 silent losses
 - metered burn per passed run: **—** over 0 passed run(s)
 - median settle time: **—**
 

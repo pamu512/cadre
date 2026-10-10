@@ -55,7 +55,7 @@ const TOOLS = [
   },
   {
     name: 'cadre_proof',
-    description: 'Show the evidence bundle of a run (local id like 0001, or an ax run id run-YYYYMMDD-HHMMSS-nnnn). Return that bundle — commands, diffs, artifacts, citations — do not replace it with a summary.',
+    description: 'Show the evidence bundle of a run (local id like 0001, or an ax run id run-YYYYMMDD-HHMMSS-nnnn). Return that bundle (commands, diffs, artifacts, citations). Do not replace it with a summary.',
     inputSchema: { type: 'object', properties: { run: { type: 'string' } } },
   },
   {
