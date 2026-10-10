@@ -202,7 +202,7 @@ export async function cmdParity(args, flags) {
     const named = (list) => list.filter((b) => parseCheck(b));
     const coreChecks = named(spec.core);
     if (spec.core.length && !coreChecks.length) {
-      console.error('parity loop · spec names no checks (command, file contains, test name, or path exists) — refusing to claim parity');
+      console.error('parity loop · spec names no checks (command, file contains, test name, or path exists): refusing to claim parity');
       for (const b of spec.core) console.log(`  not checkable: ${b.slice(0, 120)}`);
       return 2;
     }
@@ -224,7 +224,7 @@ export async function cmdParity(args, flags) {
       if (stretchChecks.length) console.log(`parity loop · ${stretchChecks.length} stretch check(s) run after core is green`);
     }
     if (!coreChecks.length && !(beyond && stretchChecks.length)) {
-      console.error('parity loop · spec names no checks (command, file contains, test name, or path exists) — refusing to claim parity');
+      console.error('parity loop · spec names no checks (command, file contains, test name, or path exists): refusing to claim parity');
       return 2;
     }
     const laneSpend = new Map();
@@ -246,7 +246,7 @@ export async function cmdParity(args, flags) {
         }
         const locked = readScopeFile(scopePath);
         if (!locked) {
-          console.log('parity loop · scope lock missing on re-read — stopping');
+          console.log('parity loop · scope lock missing on re-read: stopping');
           fileSummary();
           return 6;
         }
@@ -265,7 +265,7 @@ export async function cmdParity(args, flags) {
           noMoveStreak += 1;
           if (noMoveStreak >= 2) {
             console.log(`parity loop · CIRCUIT BREAKER: 2 iterations without closing a behavior - stopping honestly (${closedN}/${v.results.length})`);
-            for (const r of open) console.log(`  still open: ${r.behavior.slice(0, 100)} — ${r.reason}`);
+            for (const r of open) console.log(`  still open: ${r.behavior.slice(0, 100)}: ${r.reason}`);
             return 4;
           }
         } else noMoveStreak = 0;

@@ -77,15 +77,15 @@ export async function cmdMetrics(args, flags) {
     }
     const pct = (v) => (v == null ? '—' : (v * 100).toFixed(1) + '%');
     const md = [
-      '# Beyond Parity — generated from the ledger',
+      '# Beyond Parity: generated from the ledger',
       '',
-      `Generated: ${new Date().toISOString()} by \`cadre metrics --report\` — do not edit by hand; regenerate instead.`,
+      `Generated: ${new Date().toISOString()} by \`cadre metrics --report\`. do not edit by hand; regenerate instead.`,
       '',
       '## Run ledger',
       '',
       `- runs recorded: **${m.runs_total}** (settled ${m.runs_settled})`,
-      `- false-DONE rate: **${pct(m.false_done_rate)}** (${m.false_done_count} rejected/failed with claimed command evidence) — target ≤ 5%`,
-      `- sweep recovery: **${m.swept ? pct(m.sweep_recovery_rate) : '—'}** (${m.swept} swept) — target ≥ 90%, 0 silent losses`,
+      `- false-DONE rate: **${pct(m.false_done_rate)}** (${m.false_done_count} rejected/failed with claimed command evidence). Target ≤ 5%`,
+      `- sweep recovery: **${m.swept ? pct(m.sweep_recovery_rate) : '—'}** (${m.swept} swept). Target ≥ 90%, 0 silent losses`,
       `- metered burn per passed run: **${m.passed_runs ? Math.round(m.metered_burn_per_passed_run) + ' tok' : '—'}** over ${m.passed_runs} passed run(s)`,
       `- median settle time: **${m.median_settle_seconds != null ? m.median_settle_seconds.toFixed(1) + 's' : '—'}**`,
       '',

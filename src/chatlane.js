@@ -75,7 +75,7 @@ export async function chatLane(lane, messages, opts = {}) {
       throw err;
     }
     if (wait > 60000) {
-      const err = new Error(`${lane.name}: window pace wants ${Math.round(wait / 1000)}s — pausing instead of spending`);
+      const err = new Error(`${lane.name}: window pace wants ${Math.round(wait / 1000)}s, pausing instead of spending`);
       err.code = 'CADRE_PACED';
       err.waitMs = wait;
       throw err;

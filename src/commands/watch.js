@@ -41,7 +41,7 @@ export async function cmdWatch(args, flags) {
   if (flags.replay) {
     const log = runLogPath(runId);
     if (!existsSync(log)) { console.error(`no run.log for ${runId}`); return 1; }
-    console.log(`replay run ${runId} (${run.status}) — full log from the ledger:`);
+    console.log(`replay run ${runId} (${run.status}): full log from the ledger:`);
     console.log('─'.repeat(52));
     process.stdout.write(readFileSync(log, 'utf-8'));
     console.log('─'.repeat(52));

@@ -37,7 +37,7 @@ export async function cmdMeter(args, flags) {
       updated: new Date().toISOString(),
     };
     saveMeters([...meters.filter((x) => x.lane !== m), entry]);
-    console.log(`meter set: ${m} — ${entry.quota_tokens ?? '—'} tok, reset ${entry.reset_at || '—'}, rail ${entry.rail}`);
+    console.log(`meter set: ${m}, ${entry.quota_tokens ?? '—'} tok, reset ${entry.reset_at || '—'}, rail ${entry.rail}`);
     console.log('  (loopback status endpoints are read with no credentials; other rails stay what you declared)');
     return 0;
   }
@@ -65,7 +65,7 @@ export async function cmdMeter(args, flags) {
 
   if (meters.length === 0 && usage.size === 0 && huEarly.aggregate === 0 && huEarly.axUnattributed === 0) {
     console.log('no entitlements declared and no usage recorded yet.');
-    console.log('\ndeclare one (official rail — your dashboard numbers):');
+    console.log('\ndeclare one (official rail, your dashboard numbers):');
     console.log('  cadre meter --set lane=<name> --provider <provider> --quota 2000000 --reset 2026-10-08T00:00:00Z');
     console.log('\nusage burns are recorded automatically from run receipts (audit.log).');
     return 0;
@@ -84,7 +84,7 @@ export async function cmdMeter(args, flags) {
   const { harnessUsage } = await import('../meters.js');
   const hu = harnessUsage();
 
-  console.log('cadre meter — what is left on the harness');
+  console.log('cadre meter: what is left on the harness');
   console.log('(paid lanes only; free/local lanes are excluded from the split and the aggregate)');
   console.log('\ndeclared entitlements (official rails; "—" = unknown, never invented):');
   const lines = renderMeters({ meters, usage: new Map(hu.perLane.map((x) => [x.lane, { tokens: x.tokens }])) });

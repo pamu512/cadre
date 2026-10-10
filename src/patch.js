@@ -41,7 +41,7 @@ export function applyPatch(patch, { root = process.cwd() } = {}) {
     return { ok: false, file: patch.file, error: 'find-string not present', changed: false };
   }
   if (src.indexOf(patch.find, first + 1) !== -1) {
-    return { ok: false, file: patch.file, error: 'find-string is not unique — refusing ambiguous edit', changed: false };
+    return { ok: false, file: patch.file, error: 'find-string is not unique, refusing ambiguous edit', changed: false };
   }
   const out = src.slice(0, first) + patch.replace + src.slice(first + patch.find.length);
   try {
